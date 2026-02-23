@@ -1,52 +1,52 @@
 # ttLogViewer
 
-A fast and efficient terminal-based log file viewer written in C++.
+一个用 C++ 编写的快速高效的终端日志文件查看器。
 
-## Features
+## 特性
 
-- 📖 **Large File Support**: Efficiently view and navigate large log files
-- 🔍 **Chain Filtering**: Configure cascading filters to focus on relevant log entries
-- ⚡ **Terminal UI**: Lightweight interface that runs in your terminal
-- 🎯 **High Performance**: Written in C++ for maximum speed and efficiency
+- 📖 **大文件支持**: 高效查看和导航大型日志文件
+- 🔍 **链式过滤**: 配置级联过滤器，专注于相关的日志条目
+- ⚡ **终端界面**: 运行在终端中的轻量级界面
+- 🎯 **高性能**: 用 C++ 编写，追求最大速度和效率
 
-## Installation
+## 安装
 
 ```bash
-# Build from source
+# 从源码构建
 mkdir build
 cd build
 cmake ..
 make
 ```
 
-## Usage
+## 使用方法
 
 ```bash
-# View a log file
+# 查看日志文件
 ttLogViewer /path/to/logfile.log
 
-# Apply filters (example)
+# 应用过滤器（示例）
 ttLogViewer /path/to/logfile.log --filter "ERROR" --filter "WARNING"
 ```
 
-## Configuration
+## 配置
 
-Chain filters can be configured to progressively narrow down log entries:
+链式过滤器可以配置为逐步缩小日志条目范围：
 
 ```bash
-# Example: Show only ERROR logs from specific service
+# 示例：只显示特定服务的 ERROR 日志
 ttLogViewer app.log -f "service:auth" -f "ERROR"
 ```
 
-## Building
+## 构建
 
-### Requirements
+### 环境要求
 
-- C++17 or later
+- C++17 或更高版本
 - CMake 3.15+
-- (Add other dependencies as needed)
+- （根据需要添加其他依赖）
 
-### Build Steps
+### 构建步骤
 
 ```bash
 git clone <repository-url>
@@ -56,19 +56,19 @@ cmake ..
 make
 ```
 
-## Contributing
+## 贡献
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+欢迎贡献代码！请随时提交 Pull Request。
 
-## License
+## 许可证
 
-[Add your license here]
+[在此添加您的许可证信息]
 
-## Roadmap
+## 路线图
 
-- [ ] Basic log file viewing
-- [ ] Syntax highlighting
-- [ ] Chain filter implementation
-- [ ] Search functionality
-- [ ] Bookmark support
-- [ ] Configuration file support
+- [ ] 基础日志文件查看功能
+- [ ] 语法高亮
+- [ ] 链式过滤器实现
+- [ ] 搜索功能
+- [ ] 书签支持
+- [ ] 配置文件支持

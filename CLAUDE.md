@@ -1,5 +1,13 @@
 # Claude Development Guide for ttLogViewer
 
+## Language Guidelines
+
+**重要说明**：本项目语言使用规范
+- **项目对话**: 使用中文进行讨论和交流
+- **文档编写**: README、说明文档等使用中文编写
+- **代码日志**: 代码中的日志输出使用英文
+- **代码注释**: 源代码注释使用英文
+
 ## Project Overview
 
 ttLogViewer is a terminal-based log viewer application written in C++ that provides efficient viewing and filtering of large log files.
