@@ -1,30 +1,17 @@
 #pragma once
-#include <cstddef>
-#include <cstdint>
+#include <atomic>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <regex>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
-#include "log_reader.hpp"
-
-// ── Data structures ────────────────────────────────────────────────────────────
-
-struct FilterDef {
-    std::string pattern;
-    std::string color;    // "#RRGGBB"
-    bool        enabled = true;
-    bool        exclude = false;
-};
-
-// Byte-offset color segment for a single log line.
-// ASCII regex guarantees offsets land on valid UTF-8 character boundaries.
-struct ColorSpan {
-    size_t      start;
-    size_t      end;
-    std::string color;  // "#RRGGBB"
-};
+#include "i_filter_chain.hpp"
+#include "i_log_reader.hpp"
 
 // Stage cache node: definition + precompiled regex + surviving line numbers.
 // filters_[k].output holds 1-based raw line numbers that survive filters 0..k.
@@ -34,58 +21,74 @@ struct FilterNode {
     std::vector<uint32_t> output;
 };
 
-using ProgressCallback = std::function<void(double)>;   // 0.0 ~ 1.0
-using DoneCallback     = std::function<void()>;
-
 // ── FilterChain ────────────────────────────────────────────────────────────────
 
 // Maintains a chain of regex filters with per-stage output caches.
 // All public methods must be called from the UI thread only.
-class FilterChain {
+class FilterChain : public IFilterChain {
 public:
-    explicit FilterChain(LogReader& reader);
-    ~FilterChain();
+    explicit FilterChain(ILogReader& reader);
+    ~FilterChain() override;
 
     FilterChain(const FilterChain&)            = delete;
     FilterChain& operator=(const FilterChain&) = delete;
 
-    // ── Filter management ───────────────────────────────────────────────────
-    // Returns false if the pattern is not a valid regex.
-    bool append(FilterDef def);
-    void remove(size_t index);         // 0-based
-    bool edit(size_t index, FilterDef def);
-    void moveUp(size_t index);
-    void moveDown(size_t index);
+    // Inject post-to-UI function (same PostFn as LogReader).
+    void setPostFn(PostFn fn);
 
-    size_t           filterCount()   const;
-    const FilterDef& filterAt(size_t index) const;
+    // ── Filter management ────────────────────────────────────────────────────
+    bool append(FilterDef def)               override;
+    void remove(size_t index)                override;
+    bool edit(size_t index, FilterDef def)   override;
+    void moveUp(size_t index)                override;
+    void moveDown(size_t index)              override;
+
+    size_t           filterCount()            const override;
+    const FilterDef& filterAt(size_t index)   const override;
 
     // ── Query ────────────────────────────────────────────────────────────────
-    // Results from the last filter stage (or all raw lines when chain is empty).
-    size_t              filteredLineCount()                              const;
-    size_t              filteredLineAt(size_t filteredIndex)            const;  // 1-based raw line no.
-    std::vector<size_t> filteredLines(size_t from, size_t count)        const;
+    size_t              filteredLineCount()                          const override;
+    size_t              filteredLineAt(size_t filteredIndex)         const override;
+    std::vector<size_t> filteredLines(size_t from, size_t count)    const override;
 
-    // Dynamic color computation – call only for visible lines, never cached.
     std::vector<ColorSpan> computeColors(size_t rawLineNo,
-                                         std::string_view content)     const;
+                                          std::string_view content) const override;
 
     // ── Push path ────────────────────────────────────────────────────────────
-    // Called in UI thread when LogReader reports new lines (Phase 2).
-    void processNewLines(size_t firstLine, size_t lastLine);
+    void processNewLines(size_t firstLine, size_t lastLine) override;
 
-    // Async full recompute starting from fromFilter (0-based).
-    // Runs in background; calls onDone via PostEvent when finished (Phase 2).
     void reprocess(size_t fromFilter,
                    ProgressCallback onProgress,
-                   DoneCallback     onDone);
+                   DoneCallback     onDone) override;
 
-    void reset();   // Clear all caches; keep filter definitions
+    void reset() override;
 
-    void save(std::string_view path) const;
-    bool load(std::string_view path);
+    void save(std::string_view path) const override;
+    bool load(std::string_view path) override;
+
+    // Block until the current reprocess thread finishes.
+    // Intended for use in tests with a synchronous postFn.
+    void waitReprocess();
 
 private:
-    LogReader&            reader_;
+    ILogReader&             reader_;
     std::vector<FilterNode> filters_;
+    PostFn                  postFn_;
+
+    // Reprocess state (UI thread only)
+    bool isReprocessing_ = false;
+    std::vector<std::pair<size_t, size_t>> pendingNewLines_;
+
+    // Background reprocess thread
+    std::thread       reprocessThread_;
+    std::atomic<bool> cancelFlag_{false};
+
+    // Incremental helper (called in UI thread)
+    void processNewLinesImpl(size_t firstLine, size_t lastLine);
+
+    // Build output for filter at `stage` from the previous stage's output.
+    // Called in background thread with a local copy.
+    static void buildStage(std::vector<FilterNode>& nodes, size_t stage,
+                           const std::vector<std::string_view>& lineViews,
+                           const std::atomic<bool>& cancel);
 };

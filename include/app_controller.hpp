@@ -1,12 +1,15 @@
 #pragma once
+#include <atomic>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <ftxui/component/event.hpp>
 
-#include "filter_chain.hpp"
-#include "log_reader.hpp"
+#include "i_filter_chain.hpp"
+#include "i_log_reader.hpp"
 
 // ── Enumerations ───────────────────────────────────────────────────────────────
 
@@ -27,16 +30,16 @@ enum class InputMode {
 // ── State and view structures ──────────────────────────────────────────────────
 
 struct PaneState {
-    size_t cursor       = 0;   // Highlighted row, absolute index into the line list
-    size_t scrollOffset = 0;   // Index of the top visible row; driven by cursor
+    size_t cursor       = 0;
+    size_t scrollOffset = 0;
 };
 
 struct LogLine {
-    size_t           rawLineNo  = 0;
-    std::string_view content;
+    size_t                 rawLineNo   = 0;
+    std::string_view       content;
     std::vector<ColorSpan> colors;
-    bool             highlighted = false;
-    bool             folded      = false;  // Phase 3: fold long lines
+    bool                   highlighted = false;
+    bool                   folded      = false;  // Phase 3
 };
 
 struct ViewData {
@@ -44,11 +47,11 @@ struct ViewData {
     std::string fileName;
     AppMode     mode         = AppMode::Static;
     size_t      totalLines   = 0;
-    size_t      newLineCount = 0;    // Unread appended lines (non-G-lock mode)
+    size_t      newLineCount = 0;
     bool        isIndexing   = false;
-    bool        showLineNumbers = false;  // Phase 3: toggled by 'l'
+    bool        showLineNumbers = false;  // Phase 3
 
-    // ── Log panes (already clipped to pane height by AppController) ───────────
+    // ── Log panes ─────────────────────────────────────────────────────────────
     std::vector<LogLine> rawPane;
     bool                 rawFocused      = true;
     std::vector<LogLine> filteredPane;
@@ -56,7 +59,7 @@ struct ViewData {
 
     // ── Filter bar ────────────────────────────────────────────────────────────
     struct FilterTag {
-        int         number;    // 1-based display number
+        int         number;
         std::string pattern;
         std::string color;
         bool        enabled;
@@ -69,13 +72,13 @@ struct ViewData {
     InputMode   inputMode   = InputMode::None;
     std::string inputPrompt;
     std::string inputBuffer;
-    bool        inputValid  = false;   // Regex signal light
+    bool        inputValid  = false;
 
     // ── Dialog overlay ────────────────────────────────────────────────────────
     bool        showDialog      = false;
     std::string dialogTitle;
     std::string dialogBody;
-    bool        dialogHasChoice = false;  // true = Y/N, false = any key to close
+    bool        dialogHasChoice = false;
 
     // ── Progress overlay ──────────────────────────────────────────────────────
     bool   showProgress = false;
@@ -88,45 +91,109 @@ struct ViewData {
 // All methods must be called from the UI thread.
 class AppController {
 public:
-    AppController(LogReader& reader, FilterChain& chain);
+    // Phase 2: accepts abstract interfaces so tests can inject mocks.
+    AppController(ILogReader& reader, IFilterChain& chain);
     ~AppController();
 
     AppController(const AppController&)            = delete;
     AppController& operator=(const AppController&) = delete;
 
-    // Process one keyboard event. Returns true if the event was consumed.
+    // Inject post-to-UI function (needed for background callbacks).
+    void setPostFn(PostFn fn);
+
+    // Process one keyboard event. Returns true if consumed.
     bool handleKey(const ftxui::Event& event);
 
     // Build a full ViewData snapshot clipped to the given pane heights.
     ViewData getViewData(int rawPaneHeight, int filteredPaneHeight) const;
 
-    // Recalculate scroll offsets after terminal resize.
     void onTerminalResize(int width, int height);
 
-    // True while any text-input mode is active (search, filter edit, etc.).
     bool isInputActive() const;
 
-private:
-    LogReader&   reader_;
-    FilterChain& chain_;
+    // Expose cached pane heights for the renderer to use
+    // (avoids polling Terminal::Size() on every render frame).
+    int rawPaneHeight()  const { return lastRawPaneHeight_;      }
+    int filtPaneHeight() const { return lastFilteredPaneHeight_; }
 
+    // Called by LogReader callbacks (registered in open()) to handle new lines
+    // or file reset in the UI thread.
+    void handleNewLines(size_t firstLine, size_t lastLine);
+    void handleFileReset();
+
+private:
+    ILogReader&   reader_;
+    IFilterChain& chain_;
+    PostFn        postFn_;
+
+    // ── Pane state ────────────────────────────────────────────────────────────
     PaneState  rawState_;
     PaneState  filteredState_;
     FocusArea  focus_     = FocusArea::Raw;
-    InputMode  inputMode_ = InputMode::None;
+
+    // ── Input state ───────────────────────────────────────────────────────────
+    InputMode   inputMode_   = InputMode::None;
+    std::string inputBuffer_;
+    std::string inputPrompt_;
+    bool        inputValid_  = false;
+
+    // ── Filter selection ──────────────────────────────────────────────────────
+    size_t selectedFilter_  = 0;
+    size_t colorPaletteIdx_ = 0;    // Cycles through palette on Tab in FilterAdd
+
+    // ── Search state ──────────────────────────────────────────────────────────
+    std::vector<size_t> searchResults_;   // 1-based raw line numbers
+    size_t              searchIndex_ = 0;
+
+    // ── Real-time / tail-follow ───────────────────────────────────────────────
+    bool   followTail_   = false;
+    size_t newLineCount_ = 0;    // Unread new lines (non-follow mode)
+
+    // ── Dialog ────────────────────────────────────────────────────────────────
+    bool              showDialog_      = false;
+    std::string       dialogTitle_;
+    std::string       dialogBody_;
+    bool              dialogHasChoice_ = false;
+    std::function<void()> dialogYesAction_;
+    std::function<void()> dialogNoAction_;
+
+    // ── Progress ──────────────────────────────────────────────────────────────
+    bool   showProgress_ = false;
+    double progress_     = 0.0;
+
+    // Stored last-known pane heights
+    mutable int lastRawPaneHeight_      = 20;
+    mutable int lastFilteredPaneHeight_ = 20;
 
     // ── Navigation helpers ────────────────────────────────────────────────────
-    PaneState& activeState();
+    PaneState&       activeState();
     const PaneState& activeState() const;
-    size_t    activeLineCount() const;
+    size_t           activeLineCount() const;
 
     void moveCursor(int delta, int paneHeight);
     void clampScroll(PaneState& ps, size_t totalLines, int paneHeight);
+    void jumpToRawLine(size_t rawLineNo);  // Jump raw pane to a specific line
 
     // ── Key dispatch ─────────────────────────────────────────────────────────
     bool handleKeyNone(const ftxui::Event& event);
+    bool handleKeyFilterInput(const ftxui::Event& event);
+    bool handleKeySearch(const ftxui::Event& event);
+    bool handleKeyGotoLine(const ftxui::Event& event);
+    bool handleKeyOpenFile(const ftxui::Event& event);
+    bool handleKeyDialog(const ftxui::Event& event);
 
-    // Stored last-known pane heights for clamp on resize
-    mutable int lastRawPaneHeight_      = 20;
-    mutable int lastFilteredPaneHeight_ = 20;
+    // ── Input helpers ─────────────────────────────────────────────────────────
+    void enterInputMode(InputMode mode, std::string prompt, std::string prefill = "");
+    void exitInputMode();
+    void validateInputRegex();
+
+    // ── Filter helpers ────────────────────────────────────────────────────────
+    static const char* nextPaletteColor(size_t idx);
+    void triggerReprocess(size_t fromFilter = 0);
+    void showErrorDialog(std::string title, std::string body);
+    void closeDialog();
+
+    // ── Search helper ─────────────────────────────────────────────────────────
+    void runSearch(const std::string& keyword);
+    void jumpToSearchResult(size_t idx);
 };

@@ -39,13 +39,13 @@ FetchContent_Declare(googletest
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
-# ── nlohmann/json (Phase 2 – declared now, made available in phase 2) ─────────
-# FetchContent_Declare(json
-#     GIT_REPOSITORY https://github.com/nlohmann/json.git
-#     GIT_TAG        v3.11.3
-#     GIT_SHALLOW    TRUE
-# )
-# FetchContent_MakeAvailable(json)
+# ── nlohmann/json (Phase 2) ────────────────────────────────────────────────────
+FetchContent_Declare(json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(json)
 
 # ── Platform-specific link libraries ──────────────────────────────────────────
 set(PLATFORM_LIBS "")

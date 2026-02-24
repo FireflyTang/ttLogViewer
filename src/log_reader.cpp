@@ -1,6 +1,8 @@
 #include "log_reader.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 // ── Platform-specific file mapping ────────────────────────────────────────────
 //
@@ -37,7 +39,7 @@ struct LogReader::MmapRegion {
 
     bool open(const std::string& path) {
 #ifdef _WIN32
-        hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
+        hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                             nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hFile == INVALID_HANDLE_VALUE) return false;
 
@@ -100,32 +102,68 @@ struct LogReader::MmapRegion {
     const char* data() const { return ptr; }
 };
 
+// ── Platform helpers ───────────────────────────────────────────────────────────
+
+static size_t getFileSize(const std::string& path) {
+#ifdef _WIN32
+    WIN32_FILE_ATTRIBUTE_DATA attrs{};
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &attrs))
+        return 0;
+    LARGE_INTEGER li;
+    li.LowPart  = attrs.nFileSizeLow;
+    li.HighPart = static_cast<LONG>(attrs.nFileSizeHigh);
+    return static_cast<size_t>(li.QuadPart);
+#else
+    struct stat st{};
+    if (::stat(path.c_str(), &st) != 0) return 0;
+    return static_cast<size_t>(st.st_size);
+#endif
+}
+
 // ── LogReader ──────────────────────────────────────────────────────────────────
 
-LogReader::LogReader()  = default;
-LogReader::~LogReader() = default;  // Defined here so MmapRegion is complete
+LogReader::LogReader()
+    : postFn_([](std::function<void()> fn) { fn(); })  // synchronous default
+{}
+
+LogReader::~LogReader() {
+    stopWatcher();
+}
+
+void LogReader::setPostFn(PostFn fn) {
+    postFn_ = fn ? std::move(fn)
+                 : [](std::function<void()> f) { f(); };
+}
 
 bool LogReader::open(std::string_view path) {
+    stopWatcher();
     close();
 
     path_ = std::string(path);
 
-    mmap_ = std::make_unique<MmapRegion>();
+    mmap_ = std::make_shared<MmapRegion>();
     if (!mmap_->open(path_)) {
         mmap_.reset();
         return false;
     }
 
     buildIndex();
+    processedSize_ = mmap_ ? mmap_->size : 0;
     isOpen_ = true;
+
+    if (mode_ == FileMode::Realtime)
+        startWatcher();
+
     return true;
 }
 
 void LogReader::close() {
+    stopWatcher();
     isOpen_ = false;
     lineOffsets_.clear();
     mmap_.reset();
     path_.clear();
+    processedSize_ = 0;
 }
 
 // Scan the mmap region and populate lineOffsets_.
@@ -134,7 +172,7 @@ void LogReader::buildIndex() {
     lineOffsets_.clear();
 
     const char* data = mmap_ ? mmap_->data() : nullptr;
-    const size_t sz  = mmap_ ? mmap_->size  : 0;
+    const size_t sz  = mmap_ ? mmap_->size   : 0;
 
     if (!data || sz == 0) return;
 
@@ -145,14 +183,13 @@ void LogReader::buildIndex() {
             lineOffsets_.push_back(i + 1);
         }
     }
-    // lineOffsets_.size() == number of lines
 }
 
 std::string_view LogReader::getLine(size_t lineNo) const {
     if (!isOpen_ || lineNo == 0 || lineNo > lineOffsets_.size())
         return {};
 
-    const char* data = mmap_->data();
+    const char* data = mmap_ ? mmap_->data() : nullptr;
     if (!data) return {};
 
     const size_t start = lineOffsets_[lineNo - 1];
@@ -190,12 +227,99 @@ std::vector<std::string_view> LogReader::getLines(size_t from, size_t to) const 
 size_t   LogReader::lineCount()  const { return lineOffsets_.size(); }
 bool     LogReader::isIndexing() const { return false; }
 
-void     LogReader::setMode(FileMode mode) { mode_ = mode; }
-FileMode LogReader::mode()       const     { return mode_; }
+void LogReader::setMode(FileMode mode) {
+    if (mode_ == mode) return;
+    mode_ = mode;
+    if (isOpen_) {
+        if (mode_ == FileMode::Realtime)
+            startWatcher();
+        else
+            stopWatcher();
+    }
+}
 
-void LogReader::forceCheck() { /* Phase 1: no-op */ }
+FileMode LogReader::mode() const { return mode_; }
+
+std::string_view LogReader::filePath() const { return path_; }
+
+std::shared_ptr<void> LogReader::mmapAnchor() const {
+    return mmap_;  // implicit upcast shared_ptr<MmapRegion> -> shared_ptr<void>
+}
 
 void LogReader::onNewLines(NewLinesCallback cb)  { newLinesCb_  = std::move(cb); }
 void LogReader::onFileReset(FileResetCallback cb) { fileResetCb_ = std::move(cb); }
 
-std::string_view LogReader::filePath() const { return path_; }
+// ── FileWatcher ────────────────────────────────────────────────────────────────
+
+void LogReader::startWatcher() {
+    stopWatcher_.store(false);
+    watcherThread_ = std::thread([this]() { watcherLoop(); });
+}
+
+void LogReader::stopWatcher() {
+    stopWatcher_.store(true);
+    if (watcherThread_.joinable())
+        watcherThread_.join();
+}
+
+void LogReader::watcherLoop() {
+    using namespace std::chrono_literals;
+    while (!stopWatcher_.load()) {
+        for (int i = 0; i < 50 && !stopWatcher_.load(); ++i)
+            std::this_thread::sleep_for(10ms);  // 50 × 10ms = 500ms total
+        if (stopWatcher_.load()) break;
+
+        // Post doCheck to UI thread
+        postFn_([this]() {
+            if (isOpen_) doCheck();
+        });
+    }
+}
+
+// ── forceCheck / doCheck ──────────────────────────────────────────────────────
+
+void LogReader::forceCheck() {
+    if (!isOpen_) return;
+    doCheck();
+}
+
+void LogReader::doCheck() {
+    // Always called from UI thread (or synchronous postFn context in tests).
+    // No locking needed: forceCheck() is UI-thread-only; FileWatcher posts via
+    // postFn_ which serializes execution through the UI event loop.
+    const size_t currentSize = getFileSize(path_);
+
+    if (currentSize > processedSize_) {
+        // File grew: remap and index new lines
+        const size_t firstNewLine = lineOffsets_.size() + 1;
+
+        auto newMmap = std::make_shared<MmapRegion>();
+        if (!newMmap->open(path_)) return;
+
+        const char* data = newMmap->data();
+
+        // If the previously-processed content ended with '\n', the very first
+        // byte of new content starts a new line.  We must record that offset now
+        // (it was NOT recorded during the earlier scan because the condition
+        // "i + 1 < sz" would have been false at the trailing newline position).
+        if (processedSize_ > 0 && data[processedSize_ - 1] == '\n')
+            lineOffsets_.push_back(processedSize_);
+
+        for (size_t i = processedSize_; i < currentSize; ++i) {
+            if (data[i] == '\n' && i + 1 < currentSize)
+                lineOffsets_.push_back(i + 1);
+        }
+
+        mmap_ = std::move(newMmap);
+        processedSize_ = currentSize;
+
+        const size_t lastNewLine = lineOffsets_.size();
+        if (lastNewLine >= firstNewLine && newLinesCb_)
+            newLinesCb_(firstNewLine, lastNewLine);
+
+    } else if (currentSize < processedSize_) {
+        // File truncated or replaced
+        if (fileResetCb_) fileResetCb_();
+    }
+    // currentSize == processedSize_: no change
+}

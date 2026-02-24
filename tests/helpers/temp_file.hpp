@@ -25,7 +25,8 @@ public:
     }
 
     ~TempFile() {
-        std::filesystem::remove(path_);
+        std::error_code ec;
+        std::filesystem::remove(path_, ec);  // Ignore errors (file may still be held open on Windows)
     }
 
     // Write additional bytes at the end of the file.

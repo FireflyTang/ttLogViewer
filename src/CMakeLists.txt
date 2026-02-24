@@ -14,6 +14,7 @@ target_link_libraries(ttLogViewer_lib PUBLIC
     ftxui::screen
     ftxui::dom
     ftxui::component
+    nlohmann_json::nlohmann_json
     ${PLATFORM_LIBS}
 )
 

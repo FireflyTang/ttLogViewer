@@ -196,18 +196,20 @@ static Element renderProgressOverlay(const ViewData& data, Element base) {
 
 Component CreateMainComponent(AppController& controller,
                                ScreenInteractive& screen) {
-    auto renderer = Renderer([&] {
+    // Initialize pane heights from the current terminal size once.
+    // Tests can override by calling controller.onTerminalResize(w, h) AFTER this
+    // call but BEFORE Render().  The renderer reads the stored heights from the
+    // controller so it never calls Terminal::Size() during a render frame.
+    {
         auto [dimx, dimy] = Terminal::Size();
-
-        // Layout row budget:
-        //   1 status bar + 1 sep + raw pane + 1 sep + filtered pane
-        //   + 1 sep + 1 filter bar + 1 input line = 6 fixed rows
-        const int overhead = 6;
-        const int paneTotal = std::max(2, dimy - overhead);
-        const int rawH  = paneTotal / 2;
-        const int filtH = paneTotal - rawH;
-
         controller.onTerminalResize(dimx, dimy);
+    }
+
+    auto renderer = Renderer([&] {
+        // Use stored pane heights (set above or updated by resize events).
+        const int rawH  = controller.rawPaneHeight();
+        const int filtH = controller.filtPaneHeight();
+
         ViewData data = controller.getViewData(rawH, filtH);
 
         Element layout = vbox({
@@ -229,12 +231,18 @@ Component CreateMainComponent(AppController& controller,
         return layout;
     });
 
-    // Intercept events before passing to AppController
+    // Intercept events before passing to AppController.
+    // On each event, refresh the pane heights in case the terminal was resized.
     return CatchEvent(renderer, [&](Event event) {
         // Quit on 'q' when no text input is active
         if (event == Event::Character('q') && !controller.isInputActive()) {
             screen.ExitLoopClosure()();
             return true;
+        }
+        // Update heights on every event to pick up terminal resize
+        {
+            auto [dimx, dimy] = Terminal::Size();
+            controller.onTerminalResize(dimx, dimy);
         }
         return controller.handleKey(event);
     });

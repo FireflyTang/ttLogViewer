@@ -2,9 +2,23 @@ include(GoogleTest)
 
 # ── Test executable ────────────────────────────────────────────────────────────
 add_executable(ttLogViewer_tests
+    # Phase 1 (unchanged)
     unit/log_reader_test.cpp
     unit/app_controller_test.cpp
     render/log_pane_test.cpp
+
+    # Phase 2
+    unit/filter_chain_test.cpp
+    render/status_bar_test.cpp
+    render/filter_bar_test.cpp
+    render/input_line_test.cpp
+    render/dialog_overlay_test.cpp
+    e2e/file_open_test.cpp
+    e2e/filter_workflow_test.cpp
+    e2e/realtime_test.cpp
+    e2e/navigation_test.cpp
+    e2e/search_test.cpp
+    e2e/input_flow_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE
