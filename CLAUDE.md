@@ -8,16 +8,37 @@
 - **代码日志**: 代码中的日志输出使用英文
 - **代码注释**: 源代码注释使用英文
 
+## Current Status
+
+**当前阶段：架构与功能设计阶段**
+
+详细设计文档见 `docs/design.md`，该文档是功能纪要，持续更新。其中包含：
+- 已确定的功能和交互设计
+- 待定讨论的问题
+- 已明确排除的功能
+
+实现阶段尚未开始，不要生成代码，除非用户明确要求。
+
 ## Project Overview
 
-ttLogViewer is a terminal-based log viewer application written in C++ that provides efficient viewing and filtering of large log files.
+ttLogViewer 是一个终端日志查看器，用 C++ 编写，目标是高效查看和过滤超大日志文件。
 
 ## Tech Stack
 
-- **Language**: C++17 or later
+- **Language**: C++23（允许使用最新标准以获得高效简洁实现）
 - **Build System**: CMake
-- **UI Framework**: Terminal UI (TUI) - exact library TBD (ncurses, FTXUI, etc.)
-- **Target Platform**: macOS, Linux, (potentially Windows)
+- **UI Framework**: TUI - 待定（ncurses 或 FTXUI）
+- **Configuration**: JSON（使用 nlohmann/json）
+- **Target Platform**: Linux, macOS, Windows (Git Bash)
+- **File Encoding**: UTF-8 only
+
+## Architecture
+
+三层架构，详见 `docs/design.md`：
+
+1. **日志读取与缓存层**：mmap 文件读取、行索引、文件变更检测、双模式（静态/实时）
+2. **链路过滤层**：链式正则过滤、颜色标记、增量缓存、JSON 持久化
+3. **显示层**：TUI 渲染、键盘交互、虚拟列表
 
 ## Project Structure
 
@@ -27,37 +48,10 @@ ttLogViewer/
 ├── include/       # Header files
 ├── tests/         # Unit tests
 ├── docs/          # Documentation
-├── examples/      # Example log files and configs
+│   └── design.md  # 功能设计纪要（持续更新）
+├── examples/      # Example log files
 └── CMakeLists.txt # Build configuration
 ```
-
-## Key Components
-
-### 1. File Reader
-- Efficient memory-mapped file reading for large files
-- Lazy loading to handle files larger than available RAM
-- Line indexing for fast navigation
-
-### 2. Filter Engine
-- Chain filter architecture: filters can be stacked
-- Each filter processes output from previous filter
-- Support for:
-  - Regex patterns
-  - Keyword matching
-  - Time range filtering
-  - Log level filtering
-
-### 3. Terminal UI
-- Display filtered log entries
-- Navigation controls (scroll, jump, search)
-- Status bar showing filter state
-- Configuration for colors and formatting
-
-### 4. Configuration
-- YAML/JSON configuration file support
-- Predefined filter chains
-- Custom key bindings
-- Color schemes
 
 ## Development Guidelines
 
@@ -67,51 +61,21 @@ ttLogViewer/
 - Prefer standard library over custom implementations
 - Use smart pointers for memory management
 - Keep functions focused and testable
+- Use `string_view` to avoid unnecessary copies
 
 ### Performance Considerations
 - Memory-map large files instead of loading entirely
 - Implement efficient line indexing
-- Use string_view to avoid unnecessary copies
 - Consider multithreading for filter processing
-- Profile before optimizing
+- Keep UI responsive at all times
 
 ### Error Handling
 - Use exceptions for exceptional cases
 - Validate file paths and permissions
-- Handle corrupted or binary log files gracefully
-- Provide meaningful error messages
+- Provide meaningful error messages to user
 
-## Building and Testing
+## Dependencies
 
-```bash
-# Debug build
-cmake -DCMAKE_BUILD_TYPE=Debug ..
-make
-
-# Release build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-make
-
-# Run tests
-ctest
-```
-
-## Dependencies to Consider
-
-- **ncurses** or **FTXUI**: Terminal UI framework
-- **spdlog**: Logging (for the viewer's own logging)
-- **yaml-cpp** or **nlohmann/json**: Configuration parsing
+- **ncurses** or **FTXUI**: Terminal UI framework（待定）
+- **nlohmann/json**: Configuration persistence
 - **Catch2** or **Google Test**: Unit testing
-- **Boost.Filesystem** or `std::filesystem`: File operations
-
-## Current Status
-
-Project is in initial setup phase. Core components need to be implemented.
-
-## Notes for Claude
-
-- When implementing features, prioritize performance and memory efficiency
-- Test with large files (>1GB) to ensure scalability
-- Keep the UI responsive even when processing large datasets
-- Document design decisions in code comments
-- Consider cross-platform compatibility from the start
