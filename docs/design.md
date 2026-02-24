@@ -765,6 +765,224 @@ tests/
 
 ---
 
+## 线程交互分析
+
+多线程是 bug 的主要来源，本节系统梳理各线程职责、共享数据保护机制和潜在竞争点。
+
+### 线程总览
+
+| 线程名 | 所属模块 | 生命周期 | 职责 |
+|--------|----------|---------|------|
+| **UI 主线程** | 全局 | 程序全程 | FTXUI 事件循环、所有 UI 状态读写、渲染驱动 |
+| **IndexThread** | LogReader | `open()` 到索引完成后退出 | 扫描文件建立 `lineOffsets_` 行偏移表 |
+| **FileWatcher** | LogReader | 实时模式常驻，静态模式无此线程 | 500ms 轮询 `stat()`，检测追加/重写 |
+| **ReprocessThread** | FilterChain | 每次 `reprocess()` 新建，完成后退出 | 全量重算过滤链，atomic swap 结果 |
+| **SearchThread** | AppController | 每次 `/` 搜索新建，完成后退出 | `searchLines()` 遍历全量行 |
+
+---
+
+### 线程交互全景图
+
+```
+                    ┌─────────────────────────────────────────┐
+                    │             UI 主线程                    │
+                    │  FTXUI 事件循环                          │
+                    │  ├── handleKey()                        │
+                    │  ├── onNewLines()    ◄── PostEvent ──┐  │
+                    │  ├── onFileReset()   ◄── PostEvent ──┼──┤
+                    │  ├── onIndexDone()   ◄── PostEvent ──┼──┤
+                    │  ├── onReprocessDone()◄─ PostEvent ──┼──┤
+                    │  ├── onSearchDone()  ◄── PostEvent ──┼──┤
+                    │  ├── forceCheck()  ──┐               │  │
+                    │  └── getViewData()   │               │  │
+                    └──────────┬──────────┼───────────────┘  │
+                               │          │                   │
+          ┌────────────────────┼──────────┼───────────────────┘
+          │                    │          │
+          ▼                    ▼          ▼
+ ┌─────────────────┐  ┌───────────────┐  ┌─────────────────────┐
+ │   IndexThread   │  │  FileWatcher  │  │   ReprocessThread   │
+ │                 │  │               │  │                     │
+ │ atomic 写       │  │ stat() 轮询   │  │ 操作本地副本        │
+ │ lineCount_      │  │ 检测到追加 →  │  │ local_filters       │
+ │                 │  │ PostEvent     │  │ 完成后 atomic swap  │
+ │ 完成后          │  │ 检测到重写 →  │  │ filters_            │
+ │ PostEvent       │  │ PostEvent     │  │ 再 PostEvent        │
+ └─────────────────┘  └───────────────┘  └─────────────────────┘
+
+                    ┌─────────────────────┐
+                    │    SearchThread     │
+                    │                    │
+                    │ 持有 MmapRegion     │
+                    │ shared_ptr         │
+                    │ searchLines() 遍历 │
+                    │ 完成后 PostEvent   │
+                    └─────────────────────┘
+```
+
+**核心原则**：所有后台线程只做纯计算，**不触碰任何 UI 状态**；结果通过 `PostEvent` 携带数据传回 UI 线程，或先 atomic swap 再 PostEvent 通知刷新。
+
+---
+
+### 共享数据详解
+
+#### 1. `LogReader::lineOffsets_`（行偏移索引表）
+
+```
+IndexThread ──写──→ lineOffsets_[n], 然后 atomic 递增 lineCount_
+UI 线程     ──读──→ 先读 lineCount_ 确认范围，再读 lineOffsets_[0..lineCount_-1]
+```
+
+**保护机制**：`lineCount_` 声明为 `std::atomic<size_t>`。IndexThread 规则：**先完整写入 `lineOffsets_[n]`，再原子递增 `lineCount_`**（释放语义 `memory_order_release`）。UI 线程读 `lineCount_`（获取语义 `memory_order_acquire`），之后读 `lineOffsets_[0..lineCount_-1]` 均已有效。无需 mutex，热路径无锁。
+
+**不变量**：`lineOffsets_` 只追加，不修改已写入的槽位，因此 UI 线程读老槽位不存在写后读竞争。
+
+---
+
+#### 2. `LogReader::mmapPtr_` / `mmapSize_`（内存映射区域）
+
+```
+UI 线程     ──读──→ getLine() 返回 string_view（指向 mmap 内存）
+UI 线程     ──写──→ onFileReset 后 remap（重新映射）
+SearchThread──读──→ searchLines() 遍历行内容（持有旧映射引用）
+```
+
+**保护机制**：LogReader 内部用 `std::shared_ptr<MmapRegion>` 管理映射区域。SearchThread 启动时拷贝一份 `shared_ptr`（增加引用计数）。文件重置时 UI 线程创建新的 `MmapRegion` 替换，旧区域引用计数减一；SearchThread 持有引用期间旧映射不析构，不出现 dangling pointer。SearchThread 另持有 atomic 取消标志，文件重置时 UI 线程置位取消，SearchThread 提前退出并释放引用。
+
+---
+
+#### 3. `FilterChain::filters_`（过滤器链 + 阶段缓存）
+
+```
+UI 线程          ──读──→ filteredLineAt(), filteredLineCount()
+UI 线程          ──写──→ processNewLines()（追加到各阶段末尾）
+ReprocessThread  ──写──→ 操作本地 local_filters，完成后 swap
+```
+
+**保护机制**：ReprocessThread **全程操作本地副本** `vector<FilterNode> local_filters`，不触碰 `filters_`。计算完成后：
+
+```cpp
+// ReprocessThread 完成时序
+{
+    std::lock_guard lock(mutex_);
+    filters_.swap(local_filters);   // 或 atomic pointer swap
+    isReprocessing_.store(false);
+}
+screen_.PostEvent(Event::Custom);  // 通知 UI 线程刷新
+```
+
+UI 线程在 PostEvent 回调里处理 `pendingNewLines_`（见下节），始终单线程写 `filters_`，无竞争。
+
+---
+
+#### 4. `reprocess` 与 `processNewLines` 并发
+
+**场景**：ReprocessThread 运行期间，文件有新增行，FileWatcher PostEvent → UI 线程触发 `onNewLines` → 调用 `processNewLines()`。
+
+**问题**：此时 filters_ 正被 ReprocessThread 计算（写本地副本），processNewLines 若直接追加到 filters_ 会被 swap 覆盖，导致**新增行丢失**。
+
+**解决方案**：`pendingNewLines_` 缓冲（UI 线程私有变量）：
+
+```
+processNewLines() 检查 isReprocessing_
+├── true  → 缓存到 pendingNewLines_ = { firstLine, lastLine }
+└── false → 直接追加到 filters_（正常路径）
+
+ReprocessThread 完成 → PostEvent → UI 线程：
+  1. swap(filters_, local_filters)
+  2. for (auto& r : pendingNewLines_)
+         processNewLinesImpl(r.first, r.last);  // 追加到新 filters_
+  3. pendingNewLines_.clear()
+  4. isReprocessing_ = false
+```
+
+`pendingNewLines_` 和 `isReprocessing_`（非 atomic，纯 UI 线程变量）无需同步。
+
+---
+
+#### 5. AppController 搜索结果
+
+SearchThread 不直接写任何 AppController 成员。搜索结果通过 PostEvent 的 Custom Event 携带（`std::vector<size_t>` 拷贝）传回 UI 线程，UI 线程收到后赋值到 `searchResults_`。**零共享内存**，无竞争。
+
+---
+
+### 多次快速 reprocess 取消机制
+
+用户连续修改过滤器，每次修改触发一次 reprocess，需要取消上一次：
+
+```cpp
+std::atomic<bool>  cancelFlag_{false};
+std::thread        reprocessThread_;
+
+void reprocess(size_t fromFilter, ProgressCB onProg, DoneCB onDone) {
+    cancelFlag_.store(true);         // 通知上次线程取消
+    if (reprocessThread_.joinable())
+        reprocessThread_.join();     // 等上次安全退出
+    cancelFlag_.store(false);        // 重置取消标志
+    reprocessThread_ = std::thread([this, fromFilter, onProg, onDone] {
+        // 内部定期检查 cancelFlag_
+        for (size_t i = fromFilter; i < local_filters.size(); ++i) {
+            if (cancelFlag_.load()) return;  // 提前退出，不 swap，不 PostEvent
+            // ... 处理 local_filters[i] ...
+        }
+        // 未被取消 → swap + PostEvent
+    });
+}
+```
+
+**不变量**：同一时刻最多一个 ReprocessThread 存活。
+
+---
+
+### forceCheck 与 FileWatcher 竞争
+
+**场景**：用户按 `f` 触发 `forceCheck()`（UI 线程），FileWatcher 同时在后台线程执行 `stat()` 检查。两者可能同时处理同一批新增行，导致 `onNewLines` 被触发两次。
+
+**保护机制**：`checkMutex_`（LogReader 内部 mutex）。FileWatcher 和 `forceCheck()` 均先获取该锁再执行检测逻辑，保证互斥。
+
+```cpp
+void forceCheck() {
+    std::lock_guard lock(checkMutex_);
+    doCheck();   // stat() + 处理追加/重写 + PostEvent
+}
+
+// FileWatcher 线程循环
+while (!stopped_) {
+    std::this_thread::sleep_for(500ms);
+    std::lock_guard lock(checkMutex_);
+    doCheck();
+}
+```
+
+`doCheck()` 内部记录上次已处理到的文件偏移，两次调用不会重复处理同一字节范围。
+
+---
+
+### 竞争点汇总
+
+| 竞争点 | 场景 | 防范措施 |
+|--------|------|---------|
+| `lineOffsets_` 读写 | IndexThread 追加 vs UI 读 | `lineCount_` atomic release/acquire |
+| `getLine()` 返回的 string_view 失效 | SearchThread 持有 vs UI remap | SearchThread 持有 `shared_ptr<MmapRegion>` |
+| `filters_` 读写 | UI 线程读 vs ReprocessThread 写 | ReprocessThread 操作本地副本，atomic/mutex swap |
+| 新增行丢失 | reprocess 期间 FileWatcher 推新行 | `pendingNewLines_` 缓冲，swap 后补处理 |
+| 多次 reprocess 结果互相覆盖 | 用户连续改 filter | `cancelFlag_` + join 确保串行 |
+| `forceCheck` 与 FileWatcher 重复处理 | 同时触发 | `checkMutex_` 互斥 |
+| SearchThread 读已重置的文件 | 文件重写后旧 SearchThread 未退出 | `cancelFlag_` 置位 + `shared_ptr` 保活旧映射 |
+
+---
+
+### 原则总结
+
+1. **UI 线程单写 UI 状态**：所有可见状态（`filters_`、滚动位置、`inputMode` 等）只在 UI 线程写，后台线程完全不触碰
+2. **后台线程只做纯计算**：操作本地 / 只读数据，计算结果通过 PostEvent 或 atomic 交还 UI 线程
+3. **PostEvent 是唯一跨线程通知通道**：除 `lineCount_` atomic 外，后台线程不直接修改任何共享状态
+4. **hot-path 无锁**：`lineCount_` atomic 替代 mutex，频繁读取无阻塞
+5. **可取消后台任务**：所有后台线程检查 `cancelFlag_`，支持及时退出，避免堆积
+6. **资源生命周期 shared_ptr 管理**：mmap 区域通过引用计数管理，后台线程持有期间不会被析构
+
+---
+
 ## 待定讨论
 
 以下问题尚未确定，需要后续讨论：
