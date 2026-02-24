@@ -5,6 +5,7 @@
 - **目标平台**：Linux、macOS、Windows（Git Bash）
 - **C++ 标准**：允许使用最新标准（C++23），以获得高效简洁的实现
 - **文件编码**：只支持 UTF-8 编码的日志文件
+- **TUI 框架**：FTXUI v6.1.9+（现代化、跨平台、成熟生态）
 
 ---
 
@@ -297,6 +298,239 @@
 
 - **折叠超长行**：超长行截断显示，按 `z` 切换当前高亮行的折叠/展开
 - **行号显示**：按 `l` 切换显示/隐藏原始文件行号
+
+---
+
+## 模块接口设计
+
+### 跨层约定
+
+- **UI 线程安全**：所有 UI 状态变更必须在 FTXUI 事件循环线程执行
+- **后台线程原则**：后台线程只做纯计算，不触碰 UI 状态；计算完成后 atomic swap 结果，通过 `PostEvent` 通知 UI 线程刷新
+- **回调线程**：`LogReader` 的所有回调均在 UI 线程触发（FileWatcher 后台线程只侦测，内部通过 `PostEvent` 转发）
+- **数据流**：Pull（渲染驱动，自上而下）+ Push（文件追加，经 `PostEvent` 回 UI 线程）
+
+---
+
+### 第一层：LogReader
+
+```cpp
+enum class FileMode { Static, Realtime };
+
+using NewLinesCallback = std::function<void(size_t firstLine, size_t lastLine)>;
+using FileResetCallback = std::function<void()>;
+
+class LogReader {
+public:
+    bool open(std::string_view path);
+    void close();
+
+    // 零拷贝；view 在下次 forceCheck() 或文件变更前有效
+    // 仅在 UI 线程持有，不跨 forceCheck() 使用
+    std::string_view getLine(size_t lineNo) const;        // 1-based
+    std::vector<std::string_view> getLines(size_t from, size_t to) const;
+
+    size_t lineCount() const;   // 当前已索引行数（后台索引期间动态增长）
+    bool   isIndexing() const;
+
+    void     setMode(FileMode mode);
+    FileMode mode() const;
+
+    void forceCheck();
+
+    // 回调均在 UI 线程触发
+    void onNewLines(NewLinesCallback cb);
+    void onFileReset(FileResetCallback cb);
+
+    std::string_view filePath() const;
+};
+```
+
+**关键决策**：
+- 不加额外块缓存，mmap + OS 页缓存已足够
+- `getLine()` 返回 `string_view`（零拷贝）；FileWatcher 后台线程只侦测变化，remap 在 UI 线程执行保证安全
+- `lineCount()` 索引期间返回已扫描行数，界面立即可用，`g` 跳转在 `isIndexing()` 期间禁用
+
+---
+
+### 第二层：FilterChain
+
+```cpp
+struct FilterDef {
+    std::string pattern;
+    std::string color;    // "#RRGGBB"
+    bool enabled = true;
+    bool exclude = false;
+};
+
+// 行内颜色段，start/end 为字节偏移
+// ASCII 正则保证偏移落在合法 UTF-8 字符边界
+struct ColorSpan {
+    size_t      start;
+    size_t      end;
+    std::string color;
+};
+
+// filter 定义与其阶段输出缓存绑定为同一对象
+struct FilterNode {
+    FilterDef             def;
+    std::regex            compiled;  // 预编译，def 变更时同步更新
+    std::vector<uint32_t> output;    // 经本 filter 及之前所有 filter 处理后存活的行号（1-based）
+};
+
+using ProgressCallback = std::function<void(double)>;  // 0.0~1.0
+using DoneCallback     = std::function<void()>;
+
+class FilterChain {
+public:
+    explicit FilterChain(const LogReader& reader);
+
+    void append(FilterDef def);
+    void remove(size_t index);       // 0-based
+    void edit(size_t index, FilterDef def);
+    void moveUp(size_t index);
+    void moveDown(size_t index);
+
+    size_t           filterCount() const;
+    const FilterDef& filterAt(size_t index) const;
+
+    // 最终过滤结果（filters_.back().output）
+    size_t              filteredLineCount() const;
+    size_t              filteredLineAt(size_t filteredIndex) const;  // 返回原始行号（1-based）
+    std::vector<size_t> filteredLines(size_t from, size_t count) const;
+
+    // 动态计算行内颜色段（渲染时按可见行调用，不缓存）
+    std::vector<ColorSpan> computeColors(size_t rawLineNo, std::string_view content) const;
+
+    // Push 路径：UI 线程直接调用（每批行数少）
+    void processNewLines(size_t firstLine, size_t lastLine);
+
+    // filter 变更时异步重算，从 fromFilter 级开始
+    // 后台线程计算，atomic swap 结果，PostEvent 通知刷新，期间保持显示旧数据
+    void reprocess(size_t fromFilter, ProgressCallback onProgress, DoneCallback onDone);
+
+    void reset();
+
+    void save(std::string_view path) const;
+    bool load(std::string_view path);
+};
+```
+
+**关键决策**：
+- 按阶段缓存：`FilterNode.output` 存该阶段存活行号，`filters_[k].output` 的输入是 `filters_[k-1].output`
+- filter 删除时缓存随之销毁，`reprocess(fromFilter)` 只重算受影响的后续阶段
+- 内部数据：`std::vector<FilterNode> filters_`，公开接口只暴露最终结果
+
+---
+
+### 第三层：AppController
+
+```cpp
+enum class FocusArea { Raw, Filtered };
+enum class AppMode   { Static, Realtime };
+enum class InputMode {
+    None, Search, FilterAdd, FilterEdit, GotoLine, OpenFile, ExportConfirm
+};
+
+struct PaneState {
+    size_t cursor;       // 高亮行在全量列表中的绝对位置
+    size_t scrollOffset; // 视口顶行的绝对位置，由 cursor 驱动保证高亮行可见
+};
+
+struct LogLine {
+    size_t                 rawLineNo;
+    std::string_view       content;
+    std::vector<ColorSpan> colors;
+    bool                   highlighted;
+};
+
+struct ViewData {
+    // 顶部状态栏
+    std::string fileName;
+    AppMode     mode;
+    size_t      totalLines;
+    size_t      newLineCount;   // 非 G 锁定时累积的未读新增行数
+    bool        isIndexing;
+
+    // 两个独立窗格的可见行切片（已由 AppController 按窗格高度裁剪）
+    std::vector<LogLine> rawPane;
+    bool                 rawFocused;
+    std::vector<LogLine> filteredPane;
+    bool                 filteredFocused;
+
+    // 过滤器栏
+    struct FilterTag {
+        int         number;    // 1-based 显示编号
+        std::string pattern;
+        std::string color;
+        bool        enabled;
+        bool        exclude;
+        bool        selected;
+    };
+    std::vector<FilterTag> filterTags;
+
+    // 底部输入行
+    InputMode   inputMode;
+    std::string inputPrompt;   // "Pattern> " / "Goto: " 等
+    std::string inputBuffer;
+    bool        inputValid;    // 正则信号灯
+
+    // 弹窗
+    bool        showDialog;
+    std::string dialogTitle;
+    std::string dialogBody;
+    bool        dialogHasChoice;  // true = Y/N，false = 任意键关闭
+
+    // 进度条
+    bool   showProgress;
+    double progress;
+};
+
+class AppController {
+public:
+    AppController(LogReader& reader, FilterChain& chain);
+
+    bool     handleKey(const ftxui::Event& event);
+    ViewData getViewData(int rawPaneHeight, int filteredPaneHeight) const;
+    void     onTerminalResize(int width, int height);
+};
+```
+
+**关键决策**：
+- 两窗格各自维护 `PaneState`，`scrollOffset` 由 `cursor` 驱动
+- `handleKey()` 按 `InputMode` 分发到独立私有方法，每个模式一个函数
+- 搜索在后台线程执行，结果通过 `PostEvent` 回 UI 线程
+
+---
+
+### 第四层：渲染层
+
+```cpp
+// 唯一对外接口
+ftxui::Component CreateMainComponent(AppController& controller);
+```
+
+**内部子组件**：`StatusBar`、`LogPane`（虚拟列表）、`FilterBar`、`InputLine`、`DialogOverlay`、`ProgressOverlay`
+
+**关键决策**：
+- 虚拟列表由 `AppController::getViewData(paneHeight)` 负责裁剪，渲染层只排列可见切片
+- 行内颜色：按 `ColorSpan` 拆成多个 `text()` 片段，`hbox()` 拼合
+- 完全无业务状态，每次渲染调用 `getViewData()` 取最新快照
+
+---
+
+### UTF-8 多字节字符处理
+
+`ColorSpan` 使用字节偏移。UTF-8 保证 ASCII 字节（0x00–0x7F）不会出现在多字节字符的中间（中间字节固定为 0x80–0xBF），因此 ASCII 正则的匹配边界必然落在合法 UTF-8 字符边界上。FTXUI 的 `string_width()` 正确处理 CJK fullwidth 字符（2 列宽），`hbox()` 拼合颜色片段不会错位。
+
+防御性校验：
+
+```cpp
+bool isUtf8Boundary(std::string_view s, size_t pos) {
+    if (pos >= s.size()) return true;
+    return (s[pos] & 0xC0) != 0x80;  // 不是 continuation byte
+}
+```
 
 ---
 
