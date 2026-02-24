@@ -578,13 +578,19 @@ public:
 |--------|---------|
 | 正常读取行内容 | 空文件、单行无末尾换行、只有换行符的文件 |
 | `lineCount()` 正确 | 索引期间动态增长，完成后稳定 |
-| `getLine()` 内容正确 | 含中文的 UTF-8 行不截断字符 |
+| `getLine()` 内容正确 | 含中文的 UTF-8 行不截断字符；超长单行（1MB+） |
+| `getLine()` 越界 | lineNo=0（无效，1-based）；lineNo > lineCount |
+| `getLines(from, to)` 范围 | from > to（无效）；to > lineCount（末尾截断） |
+| 换行符兼容 | CRLF（\r\n）文件；混合换行符文件 |
 | `forceCheck()` 检测追加 | 追加 0 字节（无变化）、追加 1 字节、追加多行 |
-| `forceCheck()` 检测文件重写 | truncate 后重写、inode 变更 |
+| `forceCheck()` 检测文件重写 | truncate 后重写、inode 变更、文件被删除 |
+| `forceCheck()` 在未 open 时调用 | 不 crash，返回或忽略 |
 | `onNewLines` 触发参数正确 | firstLine / lastLine 边界值 |
 | `onFileReset` 触发 | 文件缩小 / 删除重建 |
+| `close()` 时索引线程仍在运行 | 应安全 join 线程，不 hang |
+| `open()` 二次调用（未先 close） | 自动关闭前一个，重新打开 |
 | 无读权限文件 | `open()` 返回 false，不 crash |
-| 静态/实时模式切换 | 切换后轮询行为变化 |
+| 静态/实时模式切换 | 切换后轮询行为变化；静态模式下 `forceCheck()` 仍能手动触发检查 |
 
 #### FilterChain
 
@@ -594,14 +600,23 @@ public:
 | 所有过滤器 disabled → 全量通过 | 部分 disabled、全部 disabled |
 | include filter 正确 | 无匹配行、全部匹配行 |
 | exclude filter 正确 | 无匹配行（结果不变）、全部匹配行（结果为空） |
-| 链式过滤结果正确 | 多个 include + exclude 混用 |
+| 链式过滤结果正确 | 多个 include + exclude 混用；首 filter 为 exclude |
 | `moveUp` / `moveDown` 后结果变化 | 调换顺序后验证结果与原链不同；moveUp 第一个 → 无效果；moveDown 最后一个 → 无效果 |
 | `remove()` 后缓存清除 | 删中间节点、删首节点、删尾节点 |
-| `processNewLines()` 追加正确 | 追加 0 行、追加 1 行、追加多行 |
+| `processNewLines()` 追加正确 | 追加 0 行、追加 1 行、追加多行；`reset()` 后调用 |
 | `reprocess(fromFilter)` 只重算后续 | spy 验证前段 output 对象未被重建 |
-| `computeColors()` 颜色段正确 | 无匹配（空 spans）、全行匹配、多处匹配、重叠匹配 |
+| `reprocess()` 期间调用变更操作 | `append/edit/remove/reset` 调用时取消当前 reprocess，重新开始 |
+| 多次快速 `reprocess()` | 最后一次结果生效，中间结果不污染状态 |
+| `computeColors()` 颜色段正确 | 无匹配（空 spans）、全行匹配、多处匹配 |
+| `computeColors()` 颜色叠加 | 后 filter 颜色覆盖前 filter 颜色；同一行多 filter 各自着色不同段 |
+| 越界访问 | `filteredLineAt(N)` N >= filteredLineCount；`filterAt(N)` N >= filterCount；`filteredLines(from, count)` 末尾部分范围 |
+| 颜色调色板耗尽 | 超出调色板数量后循环复用，不 crash |
 | 无效正则 | 构造 FilterDef 时抛出 / 返回错误，不 crash |
-| JSON save/load 往返一致 | 空链路、多 filter、含特殊字符的 pattern |
+| 空字符串 pattern `""` | 明确定义行为（拒绝或匹配所有行） |
+| `edit()` 传入相同值 | 仍触发 reprocess（保持一致性） |
+| JSON save/load 往返一致 | 空链路、多 filter、含特殊字符的 pattern、版本字段 |
+| `load()` 异常输入 | JSON schema 不匹配、version 字段未知、文件不存在 |
+| `save()` 异常路径 | 目标目录不存在 → 创建目录或返回错误 |
 | 并发：`reprocess()` 期间读 `filteredLineAt()` | 不崩溃，返回旧数据或新数据，不返回混合数据 |
 
 #### AppController
@@ -610,21 +625,47 @@ public:
 |--------|---------|
 | `↑` / `↓` 更新 cursor | cursor 在第一行时按 `↑` → 停留在 0；cursor 在末行时按 `↓` → 停留在末行 |
 | `PgDn` / `PgUp` 翻页 | 最后一页 `PgDn` → 停在末行；第一页 `PgUp` → 停在首行 |
+| `Home` / `End` 跳转 | 任意位置按 Home → cursor=0；任意位置按 End → cursor=末行 |
+| `Shift` 切换焦点 | raw ↔ filtered 各自独立滚动，切换后另一区 cursor 不变 |
 | `G` 锁定后新行自动滚末尾 | 新增 1 行、新增 100 行 |
-| 导航键取消 G 锁定 | `↑` 取消、`PgUp` 取消 |
+| `G` 在静态模式下 | 忽略，不锁定，不跳末尾 |
+| 导航键取消 G 锁定 | `↑` 取消、`PgUp` 取消、`Home` 取消 |
 | 非锁定时新行只增 `newLineCount` | cursor 不移动 |
-| `getViewData()` 裁剪正确 | paneHeight=0、paneHeight=1、paneHeight > 总行数 |
+| `s` / `r` 模式切换 | ViewData.mode 正确变化；静态→实时后轮询恢复 |
+| `l` 切换行号显示 | ViewData 中行号显示标志正确翻转 |
+| `z` 折叠/展开当前行 | 高亮行状态 toggle；其他行不受影响 |
+| `h` 帮助弹窗 | showDialog=true，内容含所有快捷键；任意键关闭 |
+| `[` / `]` 选中过滤器 | 无过滤器时无效果；到达首/末后循环 |
+| `d` 删除过滤器 | 删最后一个 filter → filterCount=0；删后编号重排 |
+| `+` / `-` 移动过滤器 | 首个上移 → 无效果；末个下移 → 无效果 |
+| `Space` 切换 enabled | ViewData.filterTags[i].enabled 翻转；结果区即时变化 |
+| `a` 完整流程 | 输入正则 → 信号灯绿 → Enter 保存；中途 Esc → 取消不创建 |
+| `a` 无效正则 | 信号灯红；Enter → 弹出编译错误信息；filter 不创建 |
+| `a` → Tab 预览颜色 | inputMode 进入颜色预览子状态 |
+| `e` 编辑完整流程 | 修改 pattern → Enter 保存，reprocess 触发；Esc 取消，filter 不变 |
+| `e` 修改为无效正则 | Enter → 弹出错误，filter 保持原值 |
+| `o` 切换文件 | 有效路径 → 文件加载；无效路径 → 错误提示；Esc → 取消 |
+| `w` 导出 | Enter 确认 → 文件写出；Esc → 取消；无 filter 时导出全量原始行 |
+| `g` 完整流程 | 逐位输入数字 → Enter 跳转；Esc 取消；isIndexing 时禁用 |
 | `g` 跳转到被过滤行 | 跳转到最近可见行，而非目标行 |
 | `g` 跳转超出行数范围 | 跳转到末行 |
-| 搜索无结果 | `n` / `p` 无响应或提示 |
+| `getViewData()` 裁剪正确 | paneHeight=0、paneHeight=1、paneHeight > 总行数 |
+| `getViewData()` 双区均空 | 未打开文件时不 crash |
+| 搜索无结果 | `n` / `p` 无响应或给出提示 |
 | 搜索单个结果 | `n` 和 `p` 均停在同一行 |
+| 搜索 `n` / `p` 循环 | 末尾结果按 `n` → 跳回首个结果；首个结果按 `p` → 跳到末尾 |
+| 搜索 `Esc` | 退出搜索模式，高亮清除，inputMode=None |
+| 搜索含中文关键词 | 正确匹配，不截断字符 |
+| 输入状态中文件追加 | 新增行通知缓存，输入完成后再刷新界面 |
+| `onTerminalResize()` | 滚动偏移重新校正，cursor 仍在可见区域 |
 | InputMode 切换不串状态 | 多种模式进出后 buffer 清空、inputValid 复位 |
 
 #### 渲染工具函数
 
 | 测试点 | 边界场景 |
 |--------|---------|
-| `renderColoredLine()` 片段数和颜色 | 无 span（1 片段）、1 span、多 span、span 覆盖全行 |
+| `renderColoredLine()` 片段数和颜色 | 无 span（1 片段）、1 span、多 span、span 覆盖全行、空字符串内容 |
+| `renderColoredLine()` CJK 内容 | 含中文字符 + 颜色段，hbox 宽度计算正确 |
 | `isUtf8Boundary()` | ASCII 字节（边界）、中文首字节（边界）、中文续字节（非边界）、pos == size（边界） |
 
 ---
@@ -635,11 +676,12 @@ public:
 
 | 子组件 | 测试内容 |
 |--------|---------|
-| `StatusBar` | 文件名、模式文字、总行数、"索引建立中..." 提示、"+N 行" 提示 |
-| `FilterBar` | tag 数量与 filterCount 一致、编号从 1 开始、disabled 有视觉区分、selected 有高亮 |
-| `LogPane` | paneHeight=5 时渲染恰好 5 行；高亮行有 `▶` 标记；行号显示/隐藏 |
-| `InputLine` | 各 InputMode 下 prompt 文字正确；buffer 内容显示；正则信号灯颜色（绿/红） |
-| `DialogOverlay` | title + body 出现在输出中；Y/N 提示仅在 `dialogHasChoice=true` 时出现 |
+| `StatusBar` | 文件名显示（超长截断）、模式文字、总行数格式（千位分隔）、"索引建立中..." 提示、newLineCount>0 时的 "+N 行" 提示 |
+| `FilterBar` | tag 数量与 filterCount 一致、编号从 1 开始连续、disabled 有视觉区分、selected 有高亮、0 个 filter 时不 crash |
+| `LogPane` | paneHeight=5 时渲染恰好 5 行；高亮行有 `▶` 标记；行号显示/隐藏切换；超长折叠行显示截断标记 |
+| `InputLine` | 各 InputMode 下 prompt 文字正确；buffer 内容显示；正则信号灯颜色（绿/红）；颜色预览状态（Tab 后） |
+| `DialogOverlay` | title + body 出现在输出中；Y/N 提示仅在 `dialogHasChoice=true` 时出现；帮助弹窗含所有快捷键；错误弹窗含错误消息 |
+| `ProgressOverlay` | 0% / 50% / 100% 时进度条宽度正确；showProgress=false 时不显示 |
 
 ---
 
@@ -649,22 +691,37 @@ public:
 
 | 场景 | 边界场景 |
 |------|---------|
-| 打开文件，raw 区显示所有行 | 空文件（0 行）、1 行文件、含中文内容 |
+| 无参数启动 | 空状态不 crash；显示打开文件提示 |
+| 打开文件，raw 区显示所有行 | 空文件（0 行）、1 行文件、含中文内容、超长单行 |
+| `o` 切换文件 | 有效路径加载；无效路径错误提示；Esc 取消；切换后旧 filter 链保留 |
 | 添加 include filter，过滤区正确 | 无匹配、全部匹配、pattern 含特殊字符 |
 | 添加 exclude filter，过滤区正确 | 排除后结果为空 |
+| `a` 输入无效正则 | 信号灯红，弹出编译错误，filter 不创建 |
+| `a` → Tab 预览并确认颜色 | 颜色正确保存到 filter |
 | 链式过滤：多 filter 叠加 | 调换顺序后结果不同（验证顺序语义） |
 | 过滤器 `moveUp` / `moveDown` 后结果变化 | moveUp 第一个 → 无变化；moveDown 最后一个 → 无变化 |
-| 删除过滤器后结果回退 | 删中间节点、删所有 filter → 全量显示 |
-| 编辑过滤器 pattern，结果重新计算 | 修改为无效正则 → 弹窗提示，filter 不更新 |
-| 过滤器 disable/enable 切换 | disable 后等同于无该 filter |
+| 删除过滤器后结果回退 | 删中间节点、删所有 filter → 全量显示；编号重排连续 |
+| 编辑过滤器 pattern，结果重新计算 | 修改为无效正则 → 弹窗提示，filter 不更新；Esc 取消 → 原值保留 |
+| 过滤器 `disable` / `enable` 切换（`Space`） | disable 后等同于无该 filter；re-enable 后结果恢复 |
+| 过滤器 `+` / `-` 移动（键盘操作路径） | 首个上移 → 无变化；末个下移 → 无变化 |
+| `s` / `r` 模式切换 | StatusBar 模式文字变化；切换到静态后文件追加不触发通知 |
+| `l` 切换行号显示 | 行号出现/消失 |
+| `z` 折叠/展开超长行 | 同一行反复切换状态正确 |
+| `h` 帮助弹窗 | 显示后任意键关闭，inputMode 恢复 None |
 | 实时模式：文件追加，新行出现 | 追加 1 行、追加 100 行、G 锁定跟随 |
-| 文件重写，弹窗出现 | showDialog=true，选 Y 重载、选 N 继续浏览 |
-| 导航：`↑↓ PgUp PgDn Home End` | 首行/末行边界 |
-| `g` 行号跳转 | 跳到已过滤行（跳最近可见行）、跳超范围 |
-| `G` 锁定 + 导航解锁 | 追加文件后确认自动滚；按 `↑` 后不再自动滚 |
-| 搜索 `/` + `n` / `p` 跳转 | 无结果、单结果、结果横跨原始和被过滤行 |
-| JSON save/load 会话恢复 | 重载后 filterCount、pattern、color 与保存前一致 |
-| 导出过滤结果 | 文件内容与 filteredPane 行内容一致 |
+| 实时模式：reprocess 进行中同时文件追加 | 两者结果均正确反映，不丢失新增行 |
+| 文件重写，弹窗出现 | showDialog=true，选 Y 重载（所有缓存清空）、选 N 继续浏览 |
+| `f` 强制重载 | 文件重写后 `f` 跳过弹窗直接刷新 |
+| 导航：`↑↓ PgUp PgDn Home End` | 首行/末行边界；两区独立（raw 区操作不影响 filtered 区） |
+| `Shift` 切换焦点 | 切换后各区 cursor 独立维护 |
+| `g` 行号跳转 | 跳到已过滤行（跳最近可见行）、跳超范围；isIndexing 时禁用 |
+| `G` 锁定 + 导航解锁 | 追加文件后确认自动滚；按 `↑` 后不再自动滚；静态模式下 `G` 无效 |
+| 搜索 `/` + `n` / `p` 跳转 | 无结果、单结果、多结果循环；`n`/`p` 到达边界后循环 |
+| 搜索结果含被过滤行 | 搜索跳转到该行，原始区高亮；过滤区不跳（该行不可见） |
+| 搜索 `Esc` | 退出搜索模式，高亮清除 |
+| `w` 导出 | Enter 确认后文件内容与 filteredPane 行内容一致；Esc 取消；无 filter 时导出全量 |
+| JSON save/load 会话恢复 | 增删 filter 后关闭再打开，filterCount、pattern、color、enabled、exclude 与保存前一致 |
+| 输入状态中文件追加 | 新增行通知缓存，输入完成后再刷新 |
 
 ---
 
@@ -683,10 +740,13 @@ tests/
 │   ├── log_pane_test.cpp
 │   └── input_line_test.cpp
 ├── e2e/
-│   ├── file_open_test.cpp
-│   ├── filter_workflow_test.cpp    # 增删改、顺序调整
-│   ├── realtime_test.cpp
-│   └── navigation_test.cpp
+│   ├── file_open_test.cpp          # 打开文件、切换文件、无参数启动
+│   ├── filter_workflow_test.cpp    # 增删改、顺序调整、disable/enable
+│   ├── realtime_test.cpp           # 追加、文件重写、G 锁定
+│   ├── navigation_test.cpp         # ↑↓PgUp/PgDn/Home/End/g/G/Shift
+│   ├── search_test.cpp             # 搜索、n/p 循环、Esc
+│   ├── input_flow_test.cpp         # a/e/o/w/g 完整输入流程
+│   └── session_test.cpp            # save/load 会话恢复、模式切换
 └── helpers/
     ├── temp_file.hpp
     ├── mock_log_reader.hpp         # Google Mock
