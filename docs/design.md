@@ -534,6 +534,177 @@ bool isUtf8Boundary(std::string_view s, size_t pos) {
 
 ---
 
+## 测试方案
+
+### 测试框架与工具
+
+- **测试框架**：Google Test + Google Mock
+- **引入方式**：CMake FetchContent 自动下载
+- **接口隔离**：`ILogReader`、`IFilterChain` 纯虚基类，供 Mock 使用
+- **渲染层测试**：FTXUI `Screen::Create()` + `Render()` 渲染到内存 buffer，不依赖真实终端
+
+**测试工具函数**（`tests/helpers/test_utils.hpp`，不进生产接口）：
+
+```cpp
+// 等待后台索引完成（带超时）
+void waitForIndexing(ILogReader& reader,
+                     std::chrono::milliseconds timeout = std::chrono::seconds(5));
+
+// 等待 reprocess() 完成（配合 std::promise）
+void waitForReprocess(std::promise<void>& done,
+                      std::chrono::milliseconds timeout = std::chrono::seconds(5));
+```
+
+**RAII 临时文件**（`tests/helpers/temp_file.hpp`）：
+
+```cpp
+class TempFile {
+public:
+    explicit TempFile(std::string_view content);
+    void append(std::string_view content);
+    void truncateAndWrite(std::string_view content);  // 模拟文件重写
+    std::string path() const;
+    ~TempFile();  // 自动删除
+};
+```
+
+---
+
+### 单元测试
+
+#### LogReader
+
+| 测试点 | 边界场景 |
+|--------|---------|
+| 正常读取行内容 | 空文件、单行无末尾换行、只有换行符的文件 |
+| `lineCount()` 正确 | 索引期间动态增长，完成后稳定 |
+| `getLine()` 内容正确 | 含中文的 UTF-8 行不截断字符 |
+| `forceCheck()` 检测追加 | 追加 0 字节（无变化）、追加 1 字节、追加多行 |
+| `forceCheck()` 检测文件重写 | truncate 后重写、inode 变更 |
+| `onNewLines` 触发参数正确 | firstLine / lastLine 边界值 |
+| `onFileReset` 触发 | 文件缩小 / 删除重建 |
+| 无读权限文件 | `open()` 返回 false，不 crash |
+| 静态/实时模式切换 | 切换后轮询行为变化 |
+
+#### FilterChain
+
+| 测试点 | 边界场景 |
+|--------|---------|
+| 无过滤器 → 全量通过 | — |
+| 所有过滤器 disabled → 全量通过 | 部分 disabled、全部 disabled |
+| include filter 正确 | 无匹配行、全部匹配行 |
+| exclude filter 正确 | 无匹配行（结果不变）、全部匹配行（结果为空） |
+| 链式过滤结果正确 | 多个 include + exclude 混用 |
+| `moveUp` / `moveDown` 后结果变化 | 调换顺序后验证结果与原链不同；moveUp 第一个 → 无效果；moveDown 最后一个 → 无效果 |
+| `remove()` 后缓存清除 | 删中间节点、删首节点、删尾节点 |
+| `processNewLines()` 追加正确 | 追加 0 行、追加 1 行、追加多行 |
+| `reprocess(fromFilter)` 只重算后续 | spy 验证前段 output 对象未被重建 |
+| `computeColors()` 颜色段正确 | 无匹配（空 spans）、全行匹配、多处匹配、重叠匹配 |
+| 无效正则 | 构造 FilterDef 时抛出 / 返回错误，不 crash |
+| JSON save/load 往返一致 | 空链路、多 filter、含特殊字符的 pattern |
+| 并发：`reprocess()` 期间读 `filteredLineAt()` | 不崩溃，返回旧数据或新数据，不返回混合数据 |
+
+#### AppController
+
+| 测试点 | 边界场景 |
+|--------|---------|
+| `↑` / `↓` 更新 cursor | cursor 在第一行时按 `↑` → 停留在 0；cursor 在末行时按 `↓` → 停留在末行 |
+| `PgDn` / `PgUp` 翻页 | 最后一页 `PgDn` → 停在末行；第一页 `PgUp` → 停在首行 |
+| `G` 锁定后新行自动滚末尾 | 新增 1 行、新增 100 行 |
+| 导航键取消 G 锁定 | `↑` 取消、`PgUp` 取消 |
+| 非锁定时新行只增 `newLineCount` | cursor 不移动 |
+| `getViewData()` 裁剪正确 | paneHeight=0、paneHeight=1、paneHeight > 总行数 |
+| `g` 跳转到被过滤行 | 跳转到最近可见行，而非目标行 |
+| `g` 跳转超出行数范围 | 跳转到末行 |
+| 搜索无结果 | `n` / `p` 无响应或提示 |
+| 搜索单个结果 | `n` 和 `p` 均停在同一行 |
+| InputMode 切换不串状态 | 多种模式进出后 buffer 清空、inputValid 复位 |
+
+#### 渲染工具函数
+
+| 测试点 | 边界场景 |
+|--------|---------|
+| `renderColoredLine()` 片段数和颜色 | 无 span（1 片段）、1 span、多 span、span 覆盖全行 |
+| `isUtf8Boundary()` | ASCII 字节（边界）、中文首字节（边界）、中文续字节（非边界）、pos == size（边界） |
+
+---
+
+### 渲染层测试（FTXUI Screen）
+
+利用 `Screen::Create()` + `Render()` 渲染到内存，检查字符内容：
+
+| 子组件 | 测试内容 |
+|--------|---------|
+| `StatusBar` | 文件名、模式文字、总行数、"索引建立中..." 提示、"+N 行" 提示 |
+| `FilterBar` | tag 数量与 filterCount 一致、编号从 1 开始、disabled 有视觉区分、selected 有高亮 |
+| `LogPane` | paneHeight=5 时渲染恰好 5 行；高亮行有 `▶` 标记；行号显示/隐藏 |
+| `InputLine` | 各 InputMode 下 prompt 文字正确；buffer 内容显示；正则信号灯颜色（绿/红） |
+| `DialogOverlay` | title + body 出现在输出中；Y/N 提示仅在 `dialogHasChoice=true` 时出现 |
+
+---
+
+### 端到端测试
+
+使用真实文件 + 真实四层对象，`handleKey()` 驱动，`getViewData()` 断言，不需要真实终端。
+
+| 场景 | 边界场景 |
+|------|---------|
+| 打开文件，raw 区显示所有行 | 空文件（0 行）、1 行文件、含中文内容 |
+| 添加 include filter，过滤区正确 | 无匹配、全部匹配、pattern 含特殊字符 |
+| 添加 exclude filter，过滤区正确 | 排除后结果为空 |
+| 链式过滤：多 filter 叠加 | 调换顺序后结果不同（验证顺序语义） |
+| 过滤器 `moveUp` / `moveDown` 后结果变化 | moveUp 第一个 → 无变化；moveDown 最后一个 → 无变化 |
+| 删除过滤器后结果回退 | 删中间节点、删所有 filter → 全量显示 |
+| 编辑过滤器 pattern，结果重新计算 | 修改为无效正则 → 弹窗提示，filter 不更新 |
+| 过滤器 disable/enable 切换 | disable 后等同于无该 filter |
+| 实时模式：文件追加，新行出现 | 追加 1 行、追加 100 行、G 锁定跟随 |
+| 文件重写，弹窗出现 | showDialog=true，选 Y 重载、选 N 继续浏览 |
+| 导航：`↑↓ PgUp PgDn Home End` | 首行/末行边界 |
+| `g` 行号跳转 | 跳到已过滤行（跳最近可见行）、跳超范围 |
+| `G` 锁定 + 导航解锁 | 追加文件后确认自动滚；按 `↑` 后不再自动滚 |
+| 搜索 `/` + `n` / `p` 跳转 | 无结果、单结果、结果横跨原始和被过滤行 |
+| JSON save/load 会话恢复 | 重载后 filterCount、pattern、color 与保存前一致 |
+| 导出过滤结果 | 文件内容与 filteredPane 行内容一致 |
+
+---
+
+### 测试目录结构
+
+```
+tests/
+├── unit/
+│   ├── log_reader_test.cpp
+│   ├── filter_chain_test.cpp
+│   ├── app_controller_test.cpp
+│   └── render_utils_test.cpp       # renderColoredLine, isUtf8Boundary
+├── render/
+│   ├── status_bar_test.cpp
+│   ├── filter_bar_test.cpp
+│   ├── log_pane_test.cpp
+│   └── input_line_test.cpp
+├── e2e/
+│   ├── file_open_test.cpp
+│   ├── filter_workflow_test.cpp    # 增删改、顺序调整
+│   ├── realtime_test.cpp
+│   └── navigation_test.cpp
+└── helpers/
+    ├── temp_file.hpp
+    ├── mock_log_reader.hpp         # Google Mock
+    ├── mock_filter_chain.hpp
+    └── test_utils.hpp              # waitForIndexing, waitForReprocess
+```
+
+### 异步测试策略
+
+| 场景 | 策略 |
+|------|------|
+| `reprocess()` 后台线程 | `DoneCallback` 里 `promise.set_value()`，`future.wait_for(5s)` 等待 |
+| 全文搜索后台线程 | 核心逻辑提取为纯函数 `searchLines()` 同步测试；异步派发不测 |
+| LogReader 后台索引 | `waitForIndexing()` 轮询 `isIndexing()` 带超时 |
+| 文件变更检测 | `forceCheck()` 设计为同步（检测并触发回调后返回），绕过轮询计时器 |
+
+---
+
 ## 待定讨论
 
 以下问题尚未确定，需要后续讨论：
