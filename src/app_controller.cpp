@@ -119,14 +119,9 @@ bool AppController::handleKey(const Event& event) {
     }
 }
 
-// ── None mode ─────────────────────────────────────────────────────────────────
+// ── None mode (sub-handlers) ───────────────────────────────────────────────────
 
-bool AppController::handleKeyNone(const Event& event) {
-    const int rph      = lastRawPaneHeight_;
-    const int fph      = lastFilteredPaneHeight_;
-    const int activePh = (focus_ == FocusArea::Raw) ? rph : fph;
-
-    // Navigation
+bool AppController::handleNavKeys(const Event& event, int activePh) {
     if (event == Event::ArrowUp)   { moveCursor(-1, activePh); return true; }
     if (event == Event::ArrowDown) { moveCursor(+1, activePh); return true; }
 
@@ -147,7 +142,7 @@ bool AppController::handleKeyNone(const Event& event) {
         return true;
     }
     if (event == Event::End) {
-        size_t total = activeLineCount();
+        const size_t total = activeLineCount();
         if (total > 0) {
             PaneState& ps = activeState();
             ps.cursor     = total - 1;
@@ -163,11 +158,12 @@ bool AppController::handleKeyNone(const Event& event) {
         return true;
     }
 
-    // Filter operations
+    return false;
+}
+
+bool AppController::handleFilterKeys(const Event& event) {
     if (event == Event::Character('a')) {
         colorPaletteIdx_ = chain_.filterCount() % 8;
-        FilterDef proto;
-        proto.color = nextPaletteColor(colorPaletteIdx_);
         enterInputMode(InputMode::FilterAdd, "Pattern> ");
         return true;
     }
@@ -220,8 +216,10 @@ bool AppController::handleKeyNone(const Event& event) {
         }
         return true;
     }
+    return false;
+}
 
-    // Search
+bool AppController::handleSearchKeys(const Event& event) {
     if (event == Event::Character('/')) {
         enterInputMode(InputMode::Search, "Search> ");
         return true;
@@ -242,20 +240,16 @@ bool AppController::handleKeyNone(const Event& event) {
         }
         return true;
     }
-
-    // Goto line
     if (event == Event::Character('g')) {
         if (!reader_.isIndexing())
             enterInputMode(InputMode::GotoLine, "Goto: ");
         return true;
     }
-
-    // Tail follow (G)
     if (event == Event::Character('G')) {
         if (reader_.mode() == FileMode::Realtime) {
-            followTail_ = true;
+            followTail_   = true;
             newLineCount_ = 0;
-            size_t total = reader_.lineCount();
+            const size_t total = reader_.lineCount();
             if (total > 0) {
                 rawState_.cursor = total - 1;
                 clampScroll(rawState_, total, lastRawPaneHeight_);
@@ -263,8 +257,10 @@ bool AppController::handleKeyNone(const Event& event) {
         }
         return true;
     }
+    return false;
+}
 
-    // File operations
+bool AppController::handleModeKeys(const Event& event) {
     if (event == Event::Character('o')) {
         enterInputMode(InputMode::OpenFile, "Open: ");
         return true;
@@ -282,8 +278,19 @@ bool AppController::handleKeyNone(const Event& event) {
         reader_.forceCheck();
         return true;
     }
-
     return false;
+}
+
+// ── None mode ─────────────────────────────────────────────────────────────────
+
+bool AppController::handleKeyNone(const Event& event) {
+    const int activePh = (focus_ == FocusArea::Raw)
+                         ? lastRawPaneHeight_ : lastFilteredPaneHeight_;
+
+    return handleNavKeys(event, activePh)
+        || handleFilterKeys(event)
+        || handleSearchKeys(event)
+        || handleModeKeys(event);
 }
 
 // ── Filter input mode ─────────────────────────────────────────────────────────
@@ -504,24 +511,74 @@ void AppController::handleFileReset() {
     dialogNoAction_ = []() {};
 }
 
+// ── getViewData helpers ────────────────────────────────────────────────────────
+
+void AppController::buildRawPane(ViewData& data) {
+    const size_t total = reader_.lineCount();
+    const size_t ph    = static_cast<size_t>(lastRawPaneHeight_);
+
+    clampScroll(rawState_, total, lastRawPaneHeight_);
+
+    const size_t first = rawState_.scrollOffset;
+    const size_t count = (total > first) ? std::min(ph, total - first) : 0;
+
+    // Pre-compute the highlighted search line (0 = none)
+    const size_t searchLine = (!searchResults_.empty()
+                               && searchIndex_ < searchResults_.size())
+                              ? searchResults_[searchIndex_] : 0;
+
+    data.rawPane.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const size_t lineNo = first + i + 1;
+        LogLine ll;
+        ll.rawLineNo   = lineNo;
+        ll.content     = reader_.getLine(lineNo);
+        ll.colors      = chain_.computeColors(lineNo, ll.content);
+        ll.highlighted = (first + i == rawState_.cursor) || (lineNo == searchLine);
+        data.rawPane.push_back(std::move(ll));
+    }
+}
+
+void AppController::buildFilteredPane(ViewData& data) {
+    const size_t total = chain_.filteredLineCount();
+    const size_t ph    = static_cast<size_t>(lastFilteredPaneHeight_);
+
+    clampScroll(filteredState_, total, lastFilteredPaneHeight_);
+
+    const size_t first = filteredState_.scrollOffset;
+    const size_t count = (total > first) ? std::min(ph, total - first) : 0;
+
+    data.filteredPane.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        const size_t rawLineNo = chain_.filteredLineAt(first + i);
+        LogLine ll;
+        ll.rawLineNo   = rawLineNo;
+        ll.content     = reader_.getLine(rawLineNo);
+        ll.colors      = chain_.computeColors(rawLineNo, ll.content);
+        ll.highlighted = (first + i == filteredState_.cursor);
+        data.filteredPane.push_back(std::move(ll));
+    }
+}
+
 // ── getViewData ────────────────────────────────────────────────────────────────
 
-ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) const {
+ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     lastRawPaneHeight_      = std::max(1, rawPaneHeight);
     lastFilteredPaneHeight_ = std::max(1, filteredPaneHeight);
 
     ViewData data;
-    data.fileName    = std::string(reader_.filePath());
-    data.mode        = (reader_.mode() == FileMode::Static) ? AppMode::Static : AppMode::Realtime;
-    data.totalLines  = reader_.lineCount();
-    data.newLineCount = newLineCount_;
-    data.isIndexing  = reader_.isIndexing();
-    data.rawFocused  = (focus_ == FocusArea::Raw);
+    data.fileName        = std::string(reader_.filePath());
+    data.mode            = (reader_.mode() == FileMode::Static) ? AppMode::Static
+                                                                 : AppMode::Realtime;
+    data.totalLines      = reader_.lineCount();
+    data.newLineCount    = newLineCount_;
+    data.isIndexing      = reader_.isIndexing();
+    data.rawFocused      = (focus_ == FocusArea::Raw);
     data.filteredFocused = !data.rawFocused;
-    data.inputMode   = inputMode_;
-    data.inputPrompt = inputPrompt_;
-    data.inputBuffer = inputBuffer_;
-    data.inputValid  = inputValid_;
+    data.inputMode       = inputMode_;
+    data.inputPrompt     = inputPrompt_;
+    data.inputBuffer     = inputBuffer_;
+    data.inputValid      = inputValid_;
 
     data.showDialog      = showDialog_;
     data.dialogTitle     = dialogTitle_;
@@ -531,59 +588,8 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) c
     data.showProgress = showProgress_;
     data.progress     = progress_;
 
-    // ── Raw pane ─────────────────────────────────────────────────────────────
-    {
-        const size_t total = reader_.lineCount();
-        const size_t ph    = static_cast<size_t>(lastRawPaneHeight_);
-
-        PaneState& rps = const_cast<AppController*>(this)->rawState_;
-        const_cast<AppController*>(this)->clampScroll(rps, total, lastRawPaneHeight_);
-
-        const size_t first = rps.scrollOffset;
-        const size_t count = (total > first) ? std::min(ph, total - first) : 0;
-
-        data.rawPane.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            const size_t lineNo = first + i + 1;
-            LogLine ll;
-            ll.rawLineNo   = lineNo;
-            ll.content     = reader_.getLine(lineNo);
-            ll.colors      = chain_.computeColors(lineNo, ll.content);
-            ll.highlighted = (first + i == rps.cursor);
-
-            // Highlight current search result only
-            if (!searchResults_.empty()
-                && searchIndex_ < searchResults_.size()
-                && lineNo == searchResults_[searchIndex_]) {
-                ll.highlighted = true;
-            }
-
-            data.rawPane.push_back(std::move(ll));
-        }
-    }
-
-    // ── Filtered pane ─────────────────────────────────────────────────────────
-    {
-        const size_t total = chain_.filteredLineCount();
-        const size_t ph    = static_cast<size_t>(lastFilteredPaneHeight_);
-
-        PaneState& fps = const_cast<AppController*>(this)->filteredState_;
-        const_cast<AppController*>(this)->clampScroll(fps, total, lastFilteredPaneHeight_);
-
-        const size_t first = fps.scrollOffset;
-        const size_t count = (total > first) ? std::min(ph, total - first) : 0;
-
-        data.filteredPane.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            const size_t rawLineNo = chain_.filteredLineAt(first + i);
-            LogLine ll;
-            ll.rawLineNo   = rawLineNo;
-            ll.content     = reader_.getLine(rawLineNo);
-            ll.colors      = chain_.computeColors(rawLineNo, ll.content);
-            ll.highlighted = (first + i == fps.cursor);
-            data.filteredPane.push_back(std::move(ll));
-        }
-    }
+    buildRawPane(data);
+    buildFilteredPane(data);
 
     // ── Filter tags ───────────────────────────────────────────────────────────
     data.filterTags.reserve(chain_.filterCount());
@@ -610,10 +616,8 @@ void AppController::onTerminalResize(int /*width*/, int height) {
     lastRawPaneHeight_      = available / 2;
     lastFilteredPaneHeight_ = available - lastRawPaneHeight_;
 
-    const_cast<AppController*>(this)->clampScroll(rawState_,
-        reader_.lineCount(), lastRawPaneHeight_);
-    const_cast<AppController*>(this)->clampScroll(filteredState_,
-        chain_.filteredLineCount(), lastFilteredPaneHeight_);
+    clampScroll(rawState_,      reader_.lineCount(),        lastRawPaneHeight_);
+    clampScroll(filteredState_, chain_.filteredLineCount(), lastFilteredPaneHeight_);
 }
 
 bool AppController::isInputActive() const {
@@ -653,11 +657,7 @@ void AppController::validateInputRegex() {
 // ── Filter helpers ────────────────────────────────────────────────────────────
 
 const char* AppController::nextPaletteColor(size_t idx) {
-    static const char* palette[] = {
-        "#FF5555", "#55FF55", "#5555FF", "#FFFF55",
-        "#FF55FF", "#55FFFF", "#FF8800", "#FF55AA",
-    };
-    return palette[idx % 8];
+    return defaultColor(idx);
 }
 
 void AppController::triggerReprocess(size_t fromFilter) {

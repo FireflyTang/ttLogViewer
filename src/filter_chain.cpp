@@ -20,8 +20,9 @@ static const char* kPalette[] = {
     "#FF8800",  // Orange
     "#FF55AA",  // Pink
 };
-static constexpr size_t kPaletteSize = sizeof(kPalette) / sizeof(kPalette[0]);
+static constexpr size_t kPaletteSize = std::size(kPalette);
 
+// Declared in i_filter_chain.hpp.
 const char* defaultColor(size_t filterIndex) {
     return kPalette[filterIndex % kPaletteSize];
 }

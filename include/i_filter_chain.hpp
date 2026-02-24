@@ -9,7 +9,7 @@
 
 struct FilterDef {
     std::string pattern;
-    std::string color;    // "#RRGGBB"
+    std::string color   = {};   // "#RRGGBB"; empty → filled by FilterChain
     bool        enabled = true;
     bool        exclude = false;
 };
@@ -23,6 +23,10 @@ struct ColorSpan {
 
 using ProgressCallback = std::function<void(double)>;   // 0.0 ~ 1.0
 using DoneCallback     = std::function<void()>;
+
+// Returns the default "#RRGGBB" color string for a filter at the given index.
+// Cycles through an 8-color palette.  Defined in filter_chain.cpp.
+const char* defaultColor(size_t filterIndex);
 
 // ── Abstract interface ─────────────────────────────────────────────────────────
 

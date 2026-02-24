@@ -264,9 +264,14 @@ void LogReader::stopWatcher() {
 
 void LogReader::watcherLoop() {
     using namespace std::chrono_literals;
+    // Poll interval: 50 ticks × 10 ms = 500 ms between file-size checks.
+    // Fine-grained ticks allow the watcher thread to stop promptly on request.
+    static constexpr int  kTickCount    = 50;
+    static constexpr auto kTickInterval = 10ms;
+
     while (!stopWatcher_.load()) {
-        for (int i = 0; i < 50 && !stopWatcher_.load(); ++i)
-            std::this_thread::sleep_for(10ms);  // 50 × 10ms = 500ms total
+        for (int i = 0; i < kTickCount && !stopWatcher_.load(); ++i)
+            std::this_thread::sleep_for(kTickInterval);
         if (stopWatcher_.load()) break;
 
         // Post doCheck to UI thread

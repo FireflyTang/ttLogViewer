@@ -105,7 +105,8 @@ public:
     bool handleKey(const ftxui::Event& event);
 
     // Build a full ViewData snapshot clipped to the given pane heights.
-    ViewData getViewData(int rawPaneHeight, int filteredPaneHeight) const;
+    // NOTE: not const — may clamp scroll positions of both panes.
+    ViewData getViewData(int rawPaneHeight, int filteredPaneHeight);
 
     void onTerminalResize(int width, int height);
 
@@ -182,6 +183,12 @@ private:
     bool handleKeyOpenFile(const ftxui::Event& event);
     bool handleKeyDialog(const ftxui::Event& event);
 
+    // Sub-handlers called by handleKeyNone()
+    bool handleNavKeys(const ftxui::Event& event, int activePh);
+    bool handleFilterKeys(const ftxui::Event& event);
+    bool handleSearchKeys(const ftxui::Event& event);
+    bool handleModeKeys(const ftxui::Event& event);
+
     // ── Input helpers ─────────────────────────────────────────────────────────
     void enterInputMode(InputMode mode, std::string prompt, std::string prefill = "");
     void exitInputMode();
@@ -196,4 +203,8 @@ private:
     // ── Search helper ─────────────────────────────────────────────────────────
     void runSearch(const std::string& keyword);
     void jumpToSearchResult(size_t idx);
+
+    // ── getViewData helpers ────────────────────────────────────────────────────
+    void buildRawPane(ViewData& data);
+    void buildFilteredPane(ViewData& data);
 };
