@@ -1,0 +1,10 @@
+2024-01-01 10:00:01 INFO  Service started
+2024-01-01 10:00:02 INFO  Listening on port 8080
+2024-01-01 10:00:03 ERROR Failed to connect to database
+2024-01-01 10:00:04 WARN  Retrying connection (attempt 1/3)
+2024-01-01 10:00:05 WARN  Retrying connection (attempt 2/3)
+2024-01-01 10:00:06 INFO  Database connection established
+2024-01-01 10:00:07 INFO  Loading configuration
+2024-01-01 10:00:08 DEBUG Config key=max_connections value=100
+2024-01-01 10:00:09 ERROR Null pointer dereference in module auth
+2024-01-01 10:00:10 INFO  Graceful shutdown initiated

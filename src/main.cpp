@@ -1,37 +1,31 @@
-#include <ftxui/dom/elements.hpp>
-#include <ftxui/screen/screen.hpp>
-#include <ftxui/component/component.hpp>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
 #include <ftxui/component/screen_interactive.hpp>
 
-int main() {
-    using namespace ftxui;
+#include "app_controller.hpp"
+#include "filter_chain.hpp"
+#include "log_reader.hpp"
+#include "render.hpp"
 
-    // Simple button component
-    auto button = Button("点击我!", []{});
+int main(int argc, char* argv[]) {
+    LogReader    reader;
+    FilterChain  chain(reader);
+    AppController controller(reader, chain);
 
-    // Simple application
-    auto component = Renderer(button, [&] {
-        return vbox({
-            text("FTXUI Hello World!") | bold | center,
-            separator(),
-            text("🎉 ttLogViewer 开发环境测试") | center,
-            separator(),
-            button->Render() | center,
-            separator(),
-            text("按 ESC 退出") | dim | center
-        }) | border;
-    });
-
-    // Handle ESC key to quit
-    component |= CatchEvent([&](Event event) {
-        if (event == Event::Escape) {
-            return true;  // Exit
+    // Open file from command-line argument if provided
+    if (argc >= 2) {
+        const std::string path = argv[1];
+        if (!reader.open(path)) {
+            std::cerr << "ttLogViewer: cannot open '" << path << "'\n";
+            return EXIT_FAILURE;
         }
-        return false;
-    });
+    }
 
-    auto screen = ScreenInteractive::TerminalOutput();
+    auto screen    = ftxui::ScreenInteractive::TerminalOutput();
+    auto component = CreateMainComponent(controller, screen);
     screen.Loop(component);
 
-    return 0;
+    return EXIT_SUCCESS;
 }
