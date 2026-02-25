@@ -1,10 +1,66 @@
-2024-01-01 10:00:01 INFO  Service started
-2024-01-01 10:00:02 INFO  Listening on port 8080
-2024-01-01 10:00:03 ERROR Failed to connect to database
-2024-01-01 10:00:04 WARN  Retrying connection (attempt 1/3)
-2024-01-01 10:00:05 WARN  Retrying connection (attempt 2/3)
-2024-01-01 10:00:06 INFO  Database connection established
-2024-01-01 10:00:07 INFO  Loading configuration
-2024-01-01 10:00:08 DEBUG Config key=max_connections value=100
-2024-01-01 10:00:09 ERROR Null pointer dereference in module auth
-2024-01-01 10:00:10 INFO  Graceful shutdown initiated
+2024-01-01 10:00:01.123 INFO  [main] Service starting up, version=2.4.1
+2024-01-01 10:00:01.456 INFO  [main] Loading configuration from /etc/myapp/config.yaml
+2024-01-01 10:00:01.789 DEBUG [config] Parsed 42 configuration keys
+2024-01-01 10:00:02.012 INFO  [db] Connecting to postgres://db.internal:5432/prod
+2024-01-01 10:00:02.345 ERROR [db] Connection refused: postgres://db.internal:5432/prod
+2024-01-01 10:00:02.678 WARN  [db] Retrying connection (attempt 1/3), backoff=1s
+2024-01-01 10:00:03.890 WARN  [db] Retrying connection (attempt 2/3), backoff=2s
+2024-01-01 10:00:05.123 INFO  [db] Connection established, pool_size=10
+2024-01-01 10:00:05.456 INFO  [cache] Warming up Redis cache at redis.internal:6379
+2024-01-01 10:00:05.789 DEBUG [cache] Loaded 1024 entries from persistent store
+2024-01-01 10:00:06.012 INFO  [http] Listening on 0.0.0.0:8080
+2024-01-01 10:00:06.345 INFO  [http] Registered routes: GET /health, GET /api/v1/users, POST /api/v1/orders
+2024-01-01 10:00:07.678 INFO  [auth] JWT secret loaded, expiry=3600s
+2024-01-01 10:00:10.001 INFO  [http] GET /health 200 OK (2ms) client=10.0.0.5
+2024-01-01 10:00:12.345 INFO  [http] GET /api/v1/users 200 OK (15ms) user=alice client=10.0.0.10
+2024-01-01 10:00:13.678 DEBUG [db] Query: SELECT * FROM users WHERE id=42 (8ms)
+2024-01-01 10:00:14.890 INFO  [http] POST /api/v1/orders 201 Created (34ms) user=alice
+2024-01-01 10:00:15.123 DEBUG [db] Query: INSERT INTO orders ... (12ms)
+2024-01-01 10:00:16.456 WARN  [rate-limit] User bob exceeded request limit: 102/100 rpm
+2024-01-01 10:00:16.789 INFO  [http] GET /api/v1/users 429 Too Many Requests (1ms) user=bob
+2024-01-01 10:00:20.012 ERROR [auth] Invalid JWT token, ip=192.168.1.55
+2024-01-01 10:00:20.345 WARN  [auth] Suspicious activity: 5 failed auth attempts from ip=192.168.1.55
+2024-01-01 10:00:21.678 INFO  [http] GET /api/v1/users 401 Unauthorized (1ms) client=192.168.1.55
+2024-01-01 10:00:25.890 INFO  [scheduler] Running daily cleanup job
+2024-01-01 10:00:26.123 DEBUG [scheduler] Deleted 389 expired sessions
+2024-01-01 10:00:26.456 INFO  [scheduler] Cleanup complete, duration=333ms
+2024-01-01 10:00:30.001 ERROR [db] Query timeout after 5000ms: SELECT COUNT(*) FROM orders WHERE status='pending'
+2024-01-01 10:00:30.234 ERROR [http] Internal Server Error: query timeout, request_id=req-7f3a
+2024-01-01 10:00:30.567 WARN  [circuit-breaker] db circuit state: CLOSED -> HALF_OPEN
+2024-01-01 10:00:31.890 INFO  [db] Slow query recovered, circuit state: HALF_OPEN -> CLOSED
+2024-01-01 10:00:35.123 INFO  [http] GET /health 200 OK (3ms) client=10.0.0.1
+2024-01-01 10:00:40.456 DEBUG [gc] GC pause 45ms, heap_used=312MB heap_max=512MB
+2024-01-01 10:00:45.789 INFO  [http] POST /api/v1/orders 201 Created (28ms) user=charlie
+2024-01-01 10:00:50.012 WARN  [memory] Heap usage at 78%: 400MB / 512MB, consider scaling
+2024-01-01 10:00:55.345 INFO  [http] GET /api/v1/users 200 OK (11ms) user=charlie
+2024-01-01 10:01:00.678 ERROR [db] Deadlock detected, transaction rolled back, tx_id=txn-9c2b
+2024-01-01 10:01:00.901 WARN  [http] POST /api/v1/orders 500 Internal Server Error (102ms) user=dave
+2024-01-01 10:01:01.234 INFO  [db] Retrying transaction txn-9c2b after 100ms backoff
+2024-01-01 10:01:01.567 INFO  [db] Transaction txn-9c2b committed on retry
+2024-01-01 10:01:05.890 INFO  [http] GET /health 200 OK (2ms) client=10.0.0.1
+2024-01-01 10:01:10.123 DEBUG [cache] Evicting 128 expired keys, memory_freed=4MB
+2024-01-01 10:01:15.456 INFO  [http] GET /api/v1/users 200 OK (9ms) user=alice
+2024-01-01 10:01:20.789 ERROR [auth] Token signing key rotation failed: permission denied /etc/myapp/keys/
+2024-01-01 10:01:20.890 WARN  [auth] Falling back to existing signing key, rotation skipped
+2024-01-01 10:01:25.012 INFO  [http] POST /api/v1/orders 201 Created (31ms) user=alice
+2024-01-01 10:01:30.345 INFO  [scheduler] Running hourly metrics flush
+2024-01-01 10:01:30.678 DEBUG [metrics] Flushed 1842 data points to prometheus gateway
+2024-01-01 10:01:30.901 INFO  [scheduler] Metrics flush complete, duration=556ms
+2024-01-01 10:01:35.234 WARN  [db] Connection pool exhausted (10/10 active), queuing request
+2024-01-01 10:01:35.567 WARN  [db] Connection pool wait time: 250ms for request req-4d8e
+2024-01-01 10:01:35.890 INFO  [db] Connection pool slot freed, resuming queued request
+2024-01-01 10:01:40.123 INFO  [http] GET /health 200 OK (2ms) client=10.0.0.1
+2024-01-01 10:01:45.456 ERROR [storage] Disk usage at 95%: 190GB / 200GB on /var/data
+2024-01-01 10:01:45.789 ERROR [storage] Write failed: no space left on device, path=/var/data/uploads/img-3829.png
+2024-01-01 10:01:46.012 WARN  [http] POST /api/v1/upload 507 Insufficient Storage (5ms) user=bob
+2024-01-01 10:01:50.345 INFO  [storage] Emergency cleanup: deleted 5GB of temp files
+2024-01-01 10:01:50.678 INFO  [storage] Disk usage now at 68%: 136GB / 200GB
+2024-01-01 10:01:55.901 INFO  [http] GET /api/v1/users 200 OK (13ms) user=dave
+2024-01-01 10:02:00.234 INFO  [main] Received SIGTERM, starting graceful shutdown
+2024-01-01 10:02:00.567 INFO  [http] Stopped accepting new connections
+2024-01-01 10:02:00.890 INFO  [http] Waiting for 3 in-flight requests to complete
+2024-01-01 10:02:01.123 INFO  [http] All requests drained
+2024-01-01 10:02:01.456 INFO  [db] Closing connection pool (10 connections)
+2024-01-01 10:02:01.789 INFO  [cache] Flushing dirty cache entries to persistent store
+2024-01-01 10:02:02.012 INFO  [cache] Flushed 47 entries, cache shutdown complete
+2024-01-01 10:02:02.345 INFO  [main] Shutdown complete, uptime=122s exit_code=0
