@@ -65,9 +65,7 @@ endif()
 option(STATIC_RUNTIME "Link C++/GCC runtimes statically" OFF)
 if(STATIC_RUNTIME)
     if(MINGW)
-        set(STATIC_RUNTIME_FLAGS
-            -static-libgcc -static-libstdc++
-            -Wl,-Bstatic,-lpthread,-Bdynamic)
+        # Handled per-target in src/CMakeLists.txt to control link order.
     elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         set(STATIC_RUNTIME_FLAGS -static-libgcc -static-libstdc++)
     endif()

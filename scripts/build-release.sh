@@ -16,6 +16,14 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# ── Ensure a writable temp directory (MinGW/MSYS2 may have TEMP→C:\WINDOWS\) ──
+export TMP="${TMP:-/tmp}"
+export TEMP="${TEMP:-/tmp}"
+if [[ "$TMP" == "C:"* || "$TMP" == "c:"* ]]; then
+    export TMP="/tmp"
+    export TEMP="/tmp"
+fi
+
 # ── Read version from CMakeLists.txt ───────────────────────────────────────────
 VERSION=$(grep -oP '(?<=VERSION )[0-9]+\.[0-9]+\.[0-9]+' CMakeLists.txt | head -1)
 if [[ -z "${VERSION}" ]]; then
