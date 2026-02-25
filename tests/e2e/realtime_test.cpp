@@ -5,6 +5,7 @@
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 class RealtimeTest : public ::testing::Test {
 protected:
@@ -14,6 +15,7 @@ protected:
             content += "line" + std::to_string(i) + "\n";
         file_ = std::make_unique<TempFile>(content);
         reader_.open(file_->path());
+        waitForIndexing(reader_);
         ctrl_.getViewData(5, 5);
     }
 

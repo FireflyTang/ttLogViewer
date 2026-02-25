@@ -13,6 +13,7 @@ add_executable(ttLogViewer_tests
     render/filter_bar_test.cpp
     render/input_line_test.cpp
     render/dialog_overlay_test.cpp
+    render/progress_overlay_test.cpp
     e2e/file_open_test.cpp
     e2e/filter_workflow_test.cpp
     e2e/realtime_test.cpp

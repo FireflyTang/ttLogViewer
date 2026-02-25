@@ -14,6 +14,14 @@
 // All public methods must be called from the UI thread,
 // EXCEPT getLine() / getLines() which are safe from any thread
 // as long as the caller holds a mmapAnchor() shared_ptr.
+//
+// Thread model:
+//   IndexThread  – background; populates lineOffsets_[], increments lineCount_ (release).
+//   FileWatcher  – background; posts doCheck() calls back to the UI thread via postFn_.
+//   UI thread    – reads lineCount_ (acquire) then lineOffsets_[0..lineCount_-1].
+//
+// Invariant: lineOffsets_ is append-only and never reallocated after IndexThread starts.
+// IndexThread reserves capacity upfront (two-pass: count then fill).
 class LogReader : public ILogReader {
 public:
     LogReader();
@@ -26,8 +34,8 @@ public:
     // is needed. Default: synchronous (calls immediately).
     void setPostFn(PostFn fn);
 
-    // Open file and build line index synchronously.
-    // Starts FileWatcher thread if current mode is Realtime.
+    // Open file and start background index thread.
+    // Starts FileWatcher thread too if current mode is Realtime.
     // Returns false if the file cannot be read.
     bool open(std::string_view path)  override;
     void close()                      override;
@@ -38,8 +46,10 @@ public:
     std::string_view              getLine(size_t lineNo)           const override;
     std::vector<std::string_view> getLines(size_t from, size_t to) const override;
 
+    // lineCount() returns the number of lines indexed so far (grows while indexing).
     size_t   lineCount()  const override;
-    bool     isIndexing() const override;  // Phase 1: always false
+    // isIndexing() returns true while the background index thread is running.
+    bool     isIndexing() const override;
 
     void     setMode(FileMode mode) override;
     FileMode mode()       const     override;
@@ -63,20 +73,37 @@ private:
 
     std::string           path_;
     FileMode              mode_     = FileMode::Static;
-    std::vector<uint64_t> lineOffsets_;   // lineOffsets_[i] = byte offset of line (i+1)
-    bool                  isOpen_   = false;
-    size_t                processedSize_ = 0;  // Bytes processed by doCheck
+
+    // lineOffsets_[i] = byte offset of line (i+1).
+    // Append-only; capacity is reserved before IndexThread starts, so no
+    // reallocation occurs while IndexThread is running.
+    std::vector<uint64_t> lineOffsets_;
+
+    // Number of lines fully indexed so far.  Written by IndexThread with
+    // memory_order_release; read by UI thread with memory_order_acquire.
+    std::atomic<size_t>   lineCount_{0};
+
+    bool   isOpen_        = false;
+    size_t processedSize_ = 0;  // Bytes processed by doCheck
 
     NewLinesCallback  newLinesCb_;
     FileResetCallback fileResetCb_;
     PostFn            postFn_;
 
-    // FileWatcher thread (Realtime mode only)
+    // ── IndexThread ───────────────────────────────────────────────────────────
+    std::thread       indexThread_;
+    std::atomic<bool> stopIndex_{false};
+    std::atomic<bool> isIndexing_{false};
+
+    void startIndexThread();
+    void stopIndexThread();
+    void indexLoop();   // Runs in indexThread_
+
+    // ── FileWatcher thread (Realtime mode only) ────────────────────────────
     std::thread       watcherThread_;
     std::atomic<bool> stopWatcher_{false};
     std::mutex        checkMutex_;
 
-    void buildIndex();
     void startWatcher();
     void stopWatcher();
     void doCheck();        // Called in UI thread; checks file for changes

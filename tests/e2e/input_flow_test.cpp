@@ -5,6 +5,7 @@
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 class InputFlowTest : public ::testing::Test {
 protected:
@@ -14,6 +15,7 @@ protected:
             content += "line" + std::to_string(i) + "\n";
         file_ = std::make_unique<TempFile>(content);
         reader_.open(file_->path());
+        waitForIndexing(reader_);
         ctrl_.getViewData(5, 5);
     }
 
@@ -121,6 +123,7 @@ TEST_F(InputFlowTest, OpenFileFlow) {
     EXPECT_EQ(data().inputMode, InputMode::OpenFile);
     type(newFile.path());
     key(ftxui::Event::Return);
+    waitForIndexing(reader_);
     EXPECT_FALSE(ctrl_.isInputActive());
     EXPECT_EQ(data().totalLines, 1u);
 }

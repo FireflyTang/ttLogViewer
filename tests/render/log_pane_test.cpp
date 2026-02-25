@@ -9,6 +9,7 @@
 #include "log_reader.hpp"
 #include "render.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 using namespace ftxui;
 
@@ -30,6 +31,7 @@ TEST(LogPaneRender, HighlightedLineHasMarker) {
     TempFile f("alpha\nbeta\ngamma\n");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     FilterChain chain(reader);
 
     std::string out = renderToString(reader, chain);
@@ -41,6 +43,7 @@ TEST(LogPaneRender, NonHighlightedLineNoMarker) {
     TempFile f("only_one_line\n");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     FilterChain chain(reader);
 
     Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(10));
@@ -63,6 +66,7 @@ TEST(LogPaneRender, EmptyFileNoCrash) {
     TempFile f("");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     FilterChain chain(reader);
 
     EXPECT_NO_THROW(renderToString(reader, chain));
@@ -74,6 +78,7 @@ TEST(LogPaneRender, StatusBarShowsLineCount) {
     TempFile f("a\nb\nc\n");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     FilterChain chain(reader);
 
     std::string out = renderToString(reader, chain);
@@ -84,6 +89,7 @@ TEST(LogPaneRender, StatusBarShowsStaticMode) {
     TempFile f("x\n");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     reader.setMode(FileMode::Static);
     FilterChain chain(reader);
 
@@ -95,6 +101,7 @@ TEST(LogPaneRender, StatusBarShowsRealtimeMode) {
     TempFile f("x\n");
     LogReader reader;
     reader.open(f.path());
+    waitForIndexing(reader);
     reader.setMode(FileMode::Realtime);
     FilterChain chain(reader);
 

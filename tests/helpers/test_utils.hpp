@@ -4,13 +4,13 @@
 #include <stdexcept>
 #include <thread>
 
-#include "log_reader.hpp"
+#include "i_log_reader.hpp"
 
 // Wait until LogReader finishes background indexing.
-// Phase 1: isIndexing() is always false, so this returns immediately.
-// Phase 2: polls with a timeout.
+// Returns immediately when isIndexing() is false (includes the case where
+// indexing is done synchronously or was never started).
 inline void waitForIndexing(
-    LogReader& reader,
+    ILogReader& reader,
     std::chrono::milliseconds timeout = std::chrono::seconds(5))
 {
     const auto deadline = std::chrono::steady_clock::now() + timeout;

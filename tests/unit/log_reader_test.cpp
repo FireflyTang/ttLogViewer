@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include "log_reader.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -12,6 +13,7 @@ TEST(LogReader, OpenValidFile) {
     TempFile f("hello\nworld\n");
     LogReader reader;
     EXPECT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
     EXPECT_FALSE(reader.isIndexing());
 }
@@ -27,9 +29,11 @@ TEST(LogReader, OpenTwiceWithoutClose) {
     TempFile f2("line2\nline3\n");
     LogReader reader;
     EXPECT_TRUE(reader.open(f1.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 1u);
     // Second open should close the first and open the new one
     EXPECT_TRUE(reader.open(f2.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
 }
 
@@ -37,6 +41,7 @@ TEST(LogReader, CloseResetsState) {
     TempFile f("hello\n");
     LogReader reader;
     EXPECT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     reader.close();
     EXPECT_EQ(reader.lineCount(), 0u);
 }
@@ -47,6 +52,7 @@ TEST(LogReader, EmptyFile) {
     TempFile f("");
     LogReader reader;
     EXPECT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 0u);
     EXPECT_EQ(sv(reader.getLine(1)), "");
 }
@@ -57,6 +63,7 @@ TEST(LogReader, SingleLineNoNewline) {
     TempFile f("hello");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 1u);
     EXPECT_EQ(sv(reader.getLine(1)), "hello");
 }
@@ -65,6 +72,7 @@ TEST(LogReader, SingleLineWithNewline) {
     TempFile f("hello\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 1u);
     EXPECT_EQ(sv(reader.getLine(1)), "hello");
 }
@@ -73,6 +81,7 @@ TEST(LogReader, MultipleLines) {
     TempFile f("one\ntwo\nthree\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 3u);
     EXPECT_EQ(sv(reader.getLine(1)), "one");
     EXPECT_EQ(sv(reader.getLine(2)), "two");
@@ -83,6 +92,7 @@ TEST(LogReader, OnlyNewline) {
     TempFile f("\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     // One empty line
     EXPECT_EQ(reader.lineCount(), 1u);
     EXPECT_EQ(sv(reader.getLine(1)), "");
@@ -92,6 +102,7 @@ TEST(LogReader, TwoNewlines) {
     TempFile f("\n\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
 }
 
@@ -101,6 +112,7 @@ TEST(LogReader, CRLFFile) {
     TempFile f("hello\r\nworld\r\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
     EXPECT_EQ(sv(reader.getLine(1)), "hello");
     EXPECT_EQ(sv(reader.getLine(2)), "world");
@@ -110,6 +122,7 @@ TEST(LogReader, MixedLineEndings) {
     TempFile f("lf\ncrlf\r\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
     EXPECT_EQ(sv(reader.getLine(1)), "lf");
     EXPECT_EQ(sv(reader.getLine(2)), "crlf");
@@ -121,6 +134,7 @@ TEST(LogReader, GetLineOutOfRangeZero) {
     TempFile f("hello\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     // lineNo=0 is invalid (1-based)
     EXPECT_EQ(sv(reader.getLine(0)), "");
 }
@@ -129,6 +143,7 @@ TEST(LogReader, GetLineOutOfRangeHigh) {
     TempFile f("hello\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     // lineNo > lineCount
     EXPECT_EQ(sv(reader.getLine(99)), "");
 }
@@ -139,6 +154,7 @@ TEST(LogReader, GetLinesNormal) {
     TempFile f("a\nb\nc\nd\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     auto lines = reader.getLines(2, 3);
     ASSERT_EQ(lines.size(), 2u);
     EXPECT_EQ(sv(lines[0]), "b");
@@ -149,6 +165,7 @@ TEST(LogReader, GetLinesFromGtTo) {
     TempFile f("a\nb\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_TRUE(reader.getLines(3, 2).empty());
 }
 
@@ -156,6 +173,7 @@ TEST(LogReader, GetLinesClampedToEnd) {
     TempFile f("a\nb\nc\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     auto lines = reader.getLines(2, 100);
     ASSERT_EQ(lines.size(), 2u);
     EXPECT_EQ(sv(lines[0]), "b");
@@ -169,6 +187,7 @@ TEST(LogReader, Utf8ChineseContent) {
     TempFile f("\xe4\xbd\xa0\xe5\xa5\xbd\n\xe4\xb8\x96\xe7\x95\x8c\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(reader.lineCount(), 2u);
     // Content should be intact (not truncated mid-character)
     auto line1 = reader.getLine(1);
@@ -181,6 +200,7 @@ TEST(LogReader, FilePath) {
     TempFile f("x\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_EQ(sv(reader.filePath()), f.path());
 }
 
@@ -190,6 +210,7 @@ TEST(LogReader, ForceCheckNoop) {
     TempFile f("x\n");
     LogReader reader;
     ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
     EXPECT_NO_THROW(reader.forceCheck());
 }
 

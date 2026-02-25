@@ -18,6 +18,7 @@ protected:
         content += "ERROR line5\n";
         file_ = std::make_unique<TempFile>(content);
         reader_.open(file_->path());
+        waitForIndexing(reader_);
         ctrl_.getViewData(5, 5);
     }
 

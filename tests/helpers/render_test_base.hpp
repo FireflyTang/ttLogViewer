@@ -19,6 +19,7 @@
 #include "log_reader.hpp"
 #include "render.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 class RenderTestBase : public ::testing::Test {
 protected:
@@ -28,6 +29,7 @@ protected:
             content += "line" + std::to_string(i) + "\n";
         file_ = std::make_unique<TempFile>(content);
         reader_.open(file_->path());
+        waitForIndexing(reader_);
         ctrl_.getViewData(3, 3);  // Initialize pane-height cache
     }
 

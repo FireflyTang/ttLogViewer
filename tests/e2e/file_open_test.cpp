@@ -5,6 +5,7 @@
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 class FileOpenTest : public ::testing::Test {
 protected:
@@ -20,29 +21,41 @@ protected:
         for (char c : s)
             key(ftxui::Event::Character(std::string(1, c)));
     }
+
+    // Open a file directly and wait for indexing to complete
+    void openAndWait(const std::string& path) {
+        reader_.open(path);
+        waitForIndexing(reader_);
+        ctrl_.getViewData(5, 5);
+    }
+
+    // Open a file via 'o' key and wait for indexing to complete
+    void openViaKeyAndWait(const std::string& path) {
+        key(ftxui::Event::Character('o'));
+        type(path);
+        key(ftxui::Event::Return);
+        waitForIndexing(reader_);
+    }
 };
 
 // ── Open via 'o' key ──────────────────────────────────────────────────────────
 
 TEST_F(FileOpenTest, OpenEmptyFile) {
     TempFile f("");
-    reader_.open(f.path());
-    ctrl_.getViewData(5, 5);
-    EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 0u);
+    openAndWait(f.path());
+    EXPECT_EQ(data().totalLines, 0u);
 }
 
 TEST_F(FileOpenTest, OpenFileWithContent) {
     TempFile f("line1\nline2\nline3\n");
-    reader_.open(f.path());
-    ctrl_.getViewData(5, 5);
-    EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 3u);
+    openAndWait(f.path());
+    EXPECT_EQ(data().totalLines, 3u);
 }
 
 TEST_F(FileOpenTest, OpenFileWithChinese) {
     TempFile f("第一行\n第二行\n第三行\n");
-    reader_.open(f.path());
-    ctrl_.getViewData(5, 5);
-    EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 3u);
+    openAndWait(f.path());
+    EXPECT_EQ(data().totalLines, 3u);
     auto sv = reader_.getLine(1);
     EXPECT_EQ(sv, "第一行");
 }
@@ -53,6 +66,7 @@ TEST_F(FileOpenTest, OpenViaKeyO) {
     EXPECT_TRUE(ctrl_.isInputActive());
     type(f.path());
     key(ftxui::Event::Return);
+    waitForIndexing(reader_);
     EXPECT_FALSE(ctrl_.isInputActive());
     EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 2u);
 }
@@ -76,12 +90,9 @@ TEST_F(FileOpenTest, EscCancelsOpenMode) {
 TEST_F(FileOpenTest, OpenViaKeyOSwitchesFile) {
     TempFile f1("file1_line1\nfile1_line2\n");
     TempFile f2("file2_line1\n");
-    reader_.open(f1.path());
-    ctrl_.getViewData(5, 5);
-    EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 2u);
+    openAndWait(f1.path());
+    EXPECT_EQ(data().totalLines, 2u);
 
-    key(ftxui::Event::Character('o'));
-    type(f2.path());
-    key(ftxui::Event::Return);
-    EXPECT_EQ(ctrl_.getViewData(5, 5).totalLines, 1u);
+    openViaKeyAndWait(f2.path());
+    EXPECT_EQ(data().totalLines, 1u);
 }

@@ -128,6 +128,7 @@ LogReader::LogReader()
 
 LogReader::~LogReader() {
     stopWatcher();
+    stopIndexThread();
 }
 
 void LogReader::setPostFn(PostFn fn) {
@@ -137,6 +138,7 @@ void LogReader::setPostFn(PostFn fn) {
 
 bool LogReader::open(std::string_view path) {
     stopWatcher();
+    stopIndexThread();
     close();
 
     path_ = std::string(path);
@@ -147,9 +149,12 @@ bool LogReader::open(std::string_view path) {
         return false;
     }
 
-    buildIndex();
-    processedSize_ = mmap_ ? mmap_->size : 0;
+    processedSize_ = mmap_->size;
     isOpen_ = true;
+    lineCount_.store(0, std::memory_order_relaxed);
+
+    // Start background index thread – returns immediately, indexing runs async.
+    startIndexThread();
 
     if (mode_ == FileMode::Realtime)
         startWatcher();
@@ -158,35 +163,89 @@ bool LogReader::open(std::string_view path) {
 }
 
 void LogReader::close() {
-    stopWatcher();
+    // stopWatcher / stopIndexThread must be called before close().
     isOpen_ = false;
+    lineCount_.store(0, std::memory_order_relaxed);
     lineOffsets_.clear();
     mmap_.reset();
     path_.clear();
     processedSize_ = 0;
 }
 
-// Scan the mmap region and populate lineOffsets_.
-// lineOffsets_[i] = byte offset of the first character of line (i+1).
-void LogReader::buildIndex() {
-    lineOffsets_.clear();
+// ── IndexThread ────────────────────────────────────────────────────────────────
 
+void LogReader::startIndexThread() {
+    stopIndex_.store(false, std::memory_order_relaxed);
+    // Set isIndexing_ BEFORE creating the thread so that waitForIndexing()
+    // callers see true immediately and do not return prematurely.
+    isIndexing_.store(true, std::memory_order_release);
+    indexThread_ = std::thread([this]() { indexLoop(); });
+}
+
+void LogReader::stopIndexThread() {
+    stopIndex_.store(true, std::memory_order_relaxed);
+    if (indexThread_.joinable())
+        indexThread_.join();
+}
+
+// Background index loop.  Runs entirely in indexThread_.
+//
+// Two-pass algorithm:
+//   Pass 1 – count newlines to determine required capacity (no allocation).
+//   Pass 2 – fill lineOffsets_[] and atomically increment lineCount_ after
+//            each entry so the UI thread can observe partial progress.
+//
+// The two-pass approach guarantees lineOffsets_ is never reallocated while
+// the UI thread reads it (invariant: append-only, capacity fixed before pass 2).
+void LogReader::indexLoop() {
+    // isIndexing_ was already set to true in startIndexThread(); keep as-is.
     const char* data = mmap_ ? mmap_->data() : nullptr;
     const size_t sz  = mmap_ ? mmap_->size   : 0;
 
-    if (!data || sz == 0) return;
+    if (!data || sz == 0) {
+        isIndexing_.store(false, std::memory_order_release);
+        postFn_([this]() { /* trigger redraw so StatusBar clears "indexing" */ });
+        return;
+    }
 
-    lineOffsets_.push_back(0);  // Line 1 starts at byte 0
+    // Pass 1: count lines to pre-allocate (avoids reallocation in pass 2).
+    size_t estLines = 1;
+    for (size_t i = 0; i < sz; ++i) {
+        if (data[i] == '\n' && i + 1 < sz)
+            ++estLines;
+        if (stopIndex_.load(std::memory_order_relaxed)) {
+            isIndexing_.store(false, std::memory_order_release);
+            return;
+        }
+    }
+
+    lineOffsets_.clear();
+    lineOffsets_.reserve(estLines + 1);  // +1 for safety margin
+
+    // Pass 2: fill offsets; UI thread reads lineOffsets_[0..lineCount_-1].
+    lineOffsets_.push_back(0);                          // Line 1 at byte 0
+    lineCount_.store(1, std::memory_order_release);     // Now visible to UI
 
     for (size_t i = 0; i < sz; ++i) {
         if (data[i] == '\n' && i + 1 < sz) {
             lineOffsets_.push_back(i + 1);
+            lineCount_.fetch_add(1, std::memory_order_release);
+        }
+        if (stopIndex_.load(std::memory_order_relaxed)) {
+            isIndexing_.store(false, std::memory_order_release);
+            return;
         }
     }
+
+    isIndexing_.store(false, std::memory_order_release);
+    // Notify UI thread so StatusBar "indexing" indicator disappears.
+    postFn_([this]() { /* trigger redraw */ });
 }
 
 std::string_view LogReader::getLine(size_t lineNo) const {
-    if (!isOpen_ || lineNo == 0 || lineNo > lineOffsets_.size())
+    // Acquire lineCount_ to establish happens-before with IndexThread's release.
+    const size_t count = lineCount_.load(std::memory_order_acquire);
+    if (!isOpen_ || lineNo == 0 || lineNo > count)
         return {};
 
     const char* data = mmap_ ? mmap_->data() : nullptr;
@@ -195,7 +254,7 @@ std::string_view LogReader::getLine(size_t lineNo) const {
     const size_t start = lineOffsets_[lineNo - 1];
     size_t end;
 
-    if (lineNo < lineOffsets_.size()) {
+    if (lineNo < count) {
         // The '\n' that terminates this line is at (lineOffsets_[lineNo] - 1)
         end = lineOffsets_[lineNo] - 1;
     } else {
@@ -215,7 +274,7 @@ std::vector<std::string_view> LogReader::getLines(size_t from, size_t to) const 
     std::vector<std::string_view> result;
     if (from > to) return result;
 
-    to = std::min(to, lineOffsets_.size());
+    to = std::min(to, lineCount_.load(std::memory_order_acquire));
     result.reserve(to - from + 1);
 
     for (size_t i = from; i <= to; ++i)
@@ -224,8 +283,8 @@ std::vector<std::string_view> LogReader::getLines(size_t from, size_t to) const 
     return result;
 }
 
-size_t   LogReader::lineCount()  const { return lineOffsets_.size(); }
-bool     LogReader::isIndexing() const { return false; }
+size_t   LogReader::lineCount()  const { return lineCount_.load(std::memory_order_acquire); }
+bool     LogReader::isIndexing() const { return isIndexing_.load(std::memory_order_acquire); }
 
 void LogReader::setMode(FileMode mode) {
     if (mode_ == mode) return;
@@ -290,13 +349,15 @@ void LogReader::forceCheck() {
 
 void LogReader::doCheck() {
     // Always called from UI thread (or synchronous postFn context in tests).
-    // No locking needed: forceCheck() is UI-thread-only; FileWatcher posts via
-    // postFn_ which serializes execution through the UI event loop.
+    // Skip if IndexThread is still running – it owns lineOffsets_ until done.
+    if (isIndexing_.load(std::memory_order_acquire)) return;
+
     const size_t currentSize = getFileSize(path_);
 
     if (currentSize > processedSize_) {
-        // File grew: remap and index new lines
-        const size_t firstNewLine = lineOffsets_.size() + 1;
+        // File grew: remap and index new lines.
+        // At this point IndexThread has finished, so we are the sole writer.
+        const size_t firstNewLine = lineCount_.load(std::memory_order_acquire) + 1;
 
         auto newMmap = std::make_shared<MmapRegion>();
         if (!newMmap->open(path_)) return;
@@ -307,18 +368,22 @@ void LogReader::doCheck() {
         // byte of new content starts a new line.  We must record that offset now
         // (it was NOT recorded during the earlier scan because the condition
         // "i + 1 < sz" would have been false at the trailing newline position).
-        if (processedSize_ > 0 && data[processedSize_ - 1] == '\n')
+        if (processedSize_ > 0 && data[processedSize_ - 1] == '\n') {
             lineOffsets_.push_back(processedSize_);
+            lineCount_.fetch_add(1, std::memory_order_release);
+        }
 
         for (size_t i = processedSize_; i < currentSize; ++i) {
-            if (data[i] == '\n' && i + 1 < currentSize)
+            if (data[i] == '\n' && i + 1 < currentSize) {
                 lineOffsets_.push_back(i + 1);
+                lineCount_.fetch_add(1, std::memory_order_release);
+            }
         }
 
         mmap_ = std::move(newMmap);
         processedSize_ = currentSize;
 
-        const size_t lastNewLine = lineOffsets_.size();
+        const size_t lastNewLine = lineCount_.load(std::memory_order_acquire);
         if (lastNewLine >= firstNewLine && newLinesCb_)
             newLinesCb_(firstNewLine, lastNewLine);
 

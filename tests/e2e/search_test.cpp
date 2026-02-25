@@ -5,6 +5,7 @@
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
 #include "temp_file.hpp"
+#include "test_utils.hpp"
 
 class SearchTest : public ::testing::Test {
 protected:
@@ -17,6 +18,7 @@ protected:
         content += "apple juice\n";    // line5
         file_ = std::make_unique<TempFile>(content);
         reader_.open(file_->path());
+        waitForIndexing(reader_);
         ctrl_.getViewData(5, 5);
     }
 
@@ -114,6 +116,7 @@ TEST_F(SearchTest, SearchChineseKeyword) {
     TempFile f("第一行\n第二行\n第一个\n");
     LogReader r2;
     r2.open(f.path());
+    waitForIndexing(r2);
     FilterChain c2(r2);
     AppController ctrl2(r2, c2);
     ctrl2.getViewData(5, 5);
