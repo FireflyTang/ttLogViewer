@@ -24,6 +24,7 @@ add_executable(ttLogViewer_tests
     # Phase 3
     unit/render_utils_test.cpp
     e2e/session_test.cpp
+    e2e/comprehensive_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE

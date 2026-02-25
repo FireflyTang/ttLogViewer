@@ -189,3 +189,64 @@ TEST(LogPaneRender, FoldedLineShowsEllipsis) {
 
     EXPECT_NE(out.find("…"), std::string::npos);
 }
+
+// ── Phase 3: line numbers and folding together ────────────────────────────────
+
+TEST(LogPaneRender, LineNumbersAndFoldingTogether) {
+    // A single long line so both features activate simultaneously.
+    std::string longLine(80, 'y');
+    TempFile f(longLine + "\n");
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(40, 20);
+
+    // Enable line numbers ('l') then fold the line ('z')
+    ctrl.handleKey(Event::Character('l'));
+    ctrl.handleKey(Event::Character('z'));
+
+    Screen s = Screen::Create(Dimension::Fixed(40), Dimension::Fixed(20));
+    Render(s, comp->Render());
+    std::string out = s.ToString();
+
+    // Both "1 " (line number) and "…" (fold ellipsis) must appear
+    EXPECT_NE(out.find("1 "), std::string::npos);
+    EXPECT_NE(out.find("…"),  std::string::npos);
+}
+
+// ── Phase 3: folding only affects the folded line ─────────────────────────────
+
+TEST(LogPaneRender, UnfoldedLinesAreUnaffected) {
+    // Two long lines; fold the second one only
+    std::string longLine(80, 'z');
+    TempFile f(longLine + "\n" + longLine + "\n");
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(40, 20);
+
+    // Move cursor to line 2 and fold it
+    ctrl.handleKey(Event::ArrowDown);
+    ctrl.handleKey(Event::Character('z'));
+
+    auto d = ctrl.getViewData(5, 5);
+    // Line 1 (cursor = 0): not folded
+    // Line 2 (cursor = 1): folded
+    bool line1Folded = false, line2Folded = false;
+    for (const auto& ll : d.rawPane) {
+        if (ll.rawLineNo == 1) line1Folded = ll.folded;
+        if (ll.rawLineNo == 2) line2Folded = ll.folded;
+    }
+    EXPECT_FALSE(line1Folded);
+    EXPECT_TRUE(line2Folded);
+}
