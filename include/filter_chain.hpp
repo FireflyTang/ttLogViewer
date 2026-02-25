@@ -66,6 +66,16 @@ public:
     void save(std::string_view path) const override;
     bool load(std::string_view path) override;
 
+    // Session-aware save: also records the last opened file and its mode.
+    // Automatically creates the parent directory if it does not exist.
+    void save(std::string_view path,
+              std::string_view lastFile,
+              FileMode         mode) const;
+
+    // Session fields read back from the last successful load().
+    std::string_view sessionLastFile() const { return sessionLastFile_; }
+    FileMode         sessionMode()     const { return sessionMode_;     }
+
     // Block until the current reprocess thread finishes.
     // Intended for use in tests with a synchronous postFn.
     void waitReprocess();
@@ -74,6 +84,10 @@ private:
     ILogReader&             reader_;
     std::vector<FilterNode> filters_;
     PostFn                  postFn_;
+
+    // Session fields (populated by load())
+    std::string sessionLastFile_;
+    FileMode    sessionMode_ = FileMode::Static;
 
     // Reprocess state (UI thread only)
     bool isReprocessing_ = false;

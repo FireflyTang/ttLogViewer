@@ -1,4 +1,5 @@
 #include "render.hpp"
+#include "render_utils.hpp"
 
 #include <algorithm>
 #include <format>
@@ -11,56 +12,6 @@
 #include <ftxui/component/event.hpp>
 
 using namespace ftxui;
-
-// ── Helpers ────────────────────────────────────────────────────────────────────
-
-// Parse "#RRGGBB" into an ftxui Color, falling back to white on error.
-static Color parseColor(std::string_view hex) {
-    if (hex.size() == 7 && hex[0] == '#') {
-        auto hexByte = [&](size_t pos) -> uint8_t {
-            unsigned v = 0;
-            for (int i = 0; i < 2; ++i) {
-                char c = hex[pos + i];
-                v = v * 16 + (c >= '0' && c <= '9' ? c - '0'
-                            : c >= 'a' && c <= 'f' ? c - 'a' + 10
-                            : c >= 'A' && c <= 'F' ? c - 'A' + 10 : 0);
-            }
-            return static_cast<uint8_t>(v);
-        };
-        return Color::RGB(hexByte(1), hexByte(3), hexByte(5));
-    }
-    return Color::White;
-}
-
-// Render a single log line with optional ColorSpan highlighting.
-static Element renderColoredLine(std::string_view content,
-                                  const std::vector<ColorSpan>& spans) {
-    if (spans.empty())
-        return text(std::string(content));  // Note: text() requires std::string
-
-    Elements parts;
-    size_t pos = 0;
-
-    for (const auto& span : spans) {
-        if (span.start > pos) {
-            // FTXUI's text() requires std::string, not string_view, so copy is unavoidable
-            parts.push_back(text(std::string(content.substr(pos, span.start - pos))));
-        }
-
-        if (span.end > span.start) {
-            parts.push_back(
-                text(std::string(content.substr(span.start, span.end - span.start)))
-                | color(parseColor(span.color))
-            );
-        }
-        pos = span.end;
-    }
-
-    if (pos < content.size())
-        parts.push_back(text(std::string(content.substr(pos))));
-
-    return hbox(std::move(parts));
-}
 
 // Format a number with thousands separators, e.g. 1234567 → "1,234,567".
 static std::string fmtCount(size_t n) {
@@ -112,7 +63,8 @@ static Element renderStatusBar(const ViewData& data) {
 
 static Element renderLogPane(const std::vector<LogLine>& lines,
                               bool focused,
-                              bool /*showLineNumbers*/) {
+                              bool showLineNumbers,
+                              int terminalWidth) {
     if (lines.empty())
         return text("") | flex;
 
@@ -120,10 +72,20 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
     rows.reserve(lines.size());
 
     for (const auto& ll : lines) {
-        Element marker = text(ll.highlighted ? "▶ " : "  ");
-        Element content = renderColoredLine(ll.content, ll.colors);
+        Elements parts;
+        // Compute the prefix width so renderColoredLine can reserve space for "…"
+        int prefixCols = 2;  // "▶ " or "  "
+        if (showLineNumbers)
+            prefixCols += static_cast<int>(std::to_string(ll.rawLineNo).size()) + 1;
+        int contentWidth = terminalWidth > prefixCols ? terminalWidth - prefixCols : 0;
 
-        Element row = hbox({ marker, content | flex });
+        if (showLineNumbers)
+            parts.push_back(text(std::to_string(ll.rawLineNo) + " ") | dim);
+        parts.push_back(text(ll.highlighted ? "▶ " : "  "));
+        parts.push_back(
+            renderColoredLine(ll.content, ll.colors, ll.folded, contentWidth) | flex);
+
+        Element row = hbox(std::move(parts));
 
         if (ll.highlighted && focused)
             row = row | inverted;
@@ -230,10 +192,12 @@ Component CreateMainComponent(AppController& controller,
         Element layout = vbox({
             renderStatusBar(data),
             separator(),
-            renderLogPane(data.rawPane, data.rawFocused, data.showLineNumbers)
+            renderLogPane(data.rawPane, data.rawFocused,
+                           data.showLineNumbers, data.terminalWidth)
                 | size(HEIGHT, EQUAL, rawH),
             separator(),
-            renderLogPane(data.filteredPane, data.filteredFocused, data.showLineNumbers)
+            renderLogPane(data.filteredPane, data.filteredFocused,
+                           data.showLineNumbers, data.terminalWidth)
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),

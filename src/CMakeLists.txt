@@ -3,6 +3,7 @@ add_library(ttLogViewer_lib STATIC
     log_reader.cpp
     filter_chain.cpp
     app_controller.cpp
+    render_utils.cpp
     render.cpp
 )
 

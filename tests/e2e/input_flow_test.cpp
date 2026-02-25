@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <filesystem>
+#include <fstream>
 #include <ftxui/component/event.hpp>
 
 #include "app_controller.hpp"
@@ -149,4 +151,57 @@ TEST_F(InputFlowTest, NewLinesWhileInputActiveDoNotMoveCursor) {
     EXPECT_TRUE(atLine1);
 
     key(ftxui::Event::Escape);
+}
+
+// ── Phase 3: 'w' export flow ──────────────────────────────────────────────────
+
+TEST_F(InputFlowTest, WKeyEntersExportConfirmMode) {
+    key(ftxui::Event::Character('w'));
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::ExportConfirm);
+    EXPECT_TRUE(ctrl_.isInputActive());
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(InputFlowTest, WKeyEscCancelsExport) {
+    key(ftxui::Event::Character('w'));
+    key(ftxui::Event::Escape);
+    EXPECT_FALSE(ctrl_.isInputActive());
+    EXPECT_EQ(data().inputMode, InputMode::None);
+}
+
+TEST_F(InputFlowTest, WKeyExportCreatesFile) {
+    key(ftxui::Event::Character('w'));
+    // The inputBuffer is the auto-generated path
+    std::string exportPath = data().inputBuffer;
+    EXPECT_FALSE(exportPath.empty());
+
+    key(ftxui::Event::Return);
+    // File should now exist
+    EXPECT_TRUE(std::filesystem::exists(exportPath));
+
+    // Close success dialog
+    key(ftxui::Event::Return);
+
+    // Cleanup
+    std::filesystem::remove(exportPath);
+}
+
+TEST_F(InputFlowTest, WKeyExportContainsLines) {
+    key(ftxui::Event::Character('w'));
+    std::string exportPath = data().inputBuffer;
+    key(ftxui::Event::Return);
+
+    // Read the file inside a scope so the ifstream is closed before we try to
+    // remove it (Windows does not allow deleting open files).
+    std::string content;
+    {
+        std::ifstream f{exportPath};
+        ASSERT_TRUE(f.is_open());
+        content = std::string((std::istreambuf_iterator<char>(f)),
+                               std::istreambuf_iterator<char>());
+    }
+    EXPECT_NE(content.find("line1"), std::string::npos);
+
+    std::filesystem::remove(exportPath);
 }

@@ -218,3 +218,45 @@ TEST(LogReader, ForceCheckWithoutOpen) {
     LogReader reader;
     EXPECT_NO_THROW(reader.forceCheck());
 }
+
+// ── Phase 3: close() / destructor safety ─────────────────────────────────────
+
+TEST(LogReader, CloseImmediatelyAfterOpen) {
+    // open() kicks off IndexThread; close() must not crash
+    TempFile f("a\nb\nc\n");
+    LogReader reader;
+    ASSERT_TRUE(reader.open(f.path()));
+    // Do NOT wait for indexing – close immediately to exercise concurrent path
+    EXPECT_NO_THROW(reader.close());
+    EXPECT_EQ(reader.lineCount(), 0u);
+}
+
+TEST(LogReader, DestructorSafeWhileIndexing) {
+    // Destructor should join IndexThread even if it hasn't finished
+    TempFile f("a\nb\nc\n");
+    {
+        LogReader reader;
+        reader.open(f.path());
+        // Reader goes out of scope without waiting – destructor must be safe
+    }
+    // If we reach here without hanging or crashing, the test passes
+    SUCCEED();
+}
+
+TEST(LogReader, StaticModeForceCheckDetectsNewLines) {
+    TempFile f("line1\n");
+    LogReader reader;
+    ASSERT_TRUE(reader.open(f.path()));
+    waitForIndexing(reader);
+    reader.setMode(FileMode::Static);
+
+    // Append without switching to realtime
+    size_t newLinesSeen = 0;
+    reader.onNewLines([&](size_t, size_t) { ++newLinesSeen; });
+
+    f.append("line2\n");
+    reader.forceCheck();
+
+    EXPECT_EQ(reader.lineCount(), 2u);
+    EXPECT_GT(newLinesSeen, 0u);
+}

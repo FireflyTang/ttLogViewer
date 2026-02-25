@@ -108,3 +108,53 @@ TEST_F(NavigationTest, GotoNotAvailableWhileIndexing) {
     EXPECT_TRUE(ctrl_.isInputActive());
     key(ftxui::Event::Escape);
 }
+
+// ── Phase 3: l / z / h keys ───────────────────────────────────────────────────
+
+TEST_F(NavigationTest, LKeyTogglesShowLineNumbers) {
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).showLineNumbers);
+    key(ftxui::Event::Character('l'));
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).showLineNumbers);
+    key(ftxui::Event::Character('l'));
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).showLineNumbers);
+}
+
+TEST_F(NavigationTest, ZKeyFoldsHighlightedLine) {
+    // Cursor is on line 1
+    auto d0 = ctrl_.getViewData(5, 5);
+    bool foldedBefore = false;
+    for (auto& ll : d0.rawPane) if (ll.highlighted) foldedBefore = ll.folded;
+    EXPECT_FALSE(foldedBefore);
+
+    key(ftxui::Event::Character('z'));
+    auto d1 = ctrl_.getViewData(5, 5);
+    bool foldedAfter = false;
+    for (auto& ll : d1.rawPane) if (ll.highlighted) foldedAfter = ll.folded;
+    EXPECT_TRUE(foldedAfter);
+}
+
+TEST_F(NavigationTest, ZKeyUnfoldsOnSecondPress) {
+    key(ftxui::Event::Character('z'));
+    key(ftxui::Event::Character('z'));
+    auto d = ctrl_.getViewData(5, 5);
+    for (auto& ll : d.rawPane) {
+        if (ll.highlighted) {
+            EXPECT_FALSE(ll.folded);
+        }
+    }
+}
+
+TEST_F(NavigationTest, HKeyShowsDialog) {
+    key(ftxui::Event::Character('h'));
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_TRUE(d.showDialog);
+    EXPECT_FALSE(d.dialogHasChoice);
+    EXPECT_NE(d.dialogBody.find("q"), std::string::npos);
+}
+
+TEST_F(NavigationTest, HKeyDialogClosesOnAnyKey) {
+    key(ftxui::Event::Character('h'));
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).showDialog);
+    key(ftxui::Event::Return);
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).showDialog);
+}

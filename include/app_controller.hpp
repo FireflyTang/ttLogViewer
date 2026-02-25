@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include <ftxui/component/event.hpp>
@@ -50,6 +51,7 @@ struct ViewData {
     size_t      newLineCount = 0;
     bool        isIndexing   = false;
     bool        showLineNumbers = false;  // Phase 3
+    int         terminalWidth   = 80;    // Phase 3: for fold truncation
 
     // ── Log panes ─────────────────────────────────────────────────────────────
     std::vector<LogLine> rawPane;
@@ -162,6 +164,12 @@ private:
     bool   showProgress_ = false;
     double progress_     = 0.0;
 
+    // ── Phase 3 state ─────────────────────────────────────────────────────────
+    bool                       showLineNumbers_ = false;
+    std::unordered_set<size_t> foldedLines_;       // rawLineNo values that are folded
+    int                        lastTerminalWidth_ = 80;
+    std::string                exportPath_;        // Generated on 'w' press
+
     // Cached pane heights for rendering. Marked mutable because getViewData()
     // updates these values even though it's logically a query operation.
     // This allows the renderer to get consistent pane heights without calling
@@ -185,6 +193,7 @@ private:
     bool handleKeyGotoLine(const ftxui::Event& event);
     bool handleKeyOpenFile(const ftxui::Event& event);
     bool handleKeyDialog(const ftxui::Event& event);
+    bool handleKeyExportConfirm(const ftxui::Event& event);  // Phase 3
 
     // Sub-handlers called by handleKeyNone()
     bool handleNavKeys(const ftxui::Event& event, int activePh);

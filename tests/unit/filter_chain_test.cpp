@@ -1,4 +1,6 @@
 #include <gtest/gtest.h>
+#include <chrono>
+#include <filesystem>
 
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
@@ -347,4 +349,43 @@ TEST_F(FilterChainTest, FilteredLinesPartialAtEnd) {
     auto lines = chain_.filteredLines(1, 10);
     ASSERT_EQ(lines.size(), 1u);
     EXPECT_EQ(lines[0], 7u);
+}
+
+// ── Phase 3: save() with missing parent directory ────────────────────────────
+
+TEST_F(FilterChainTest, SaveCreatesParentDirectory) {
+    namespace fs = std::filesystem;
+    const std::string dir = (fs::temp_directory_path()
+                             / ("ttlv_fc_dir_" + std::to_string(
+                                   std::chrono::steady_clock::now().time_since_epoch().count()))
+                             / "nested").string();
+    const std::string sPath = dir + "/session.json";
+
+    // Should not throw and should create the file
+    chain_.append({.pattern = "ERROR"});
+    EXPECT_NO_THROW(chain_.save(sPath, "file.log", FileMode::Static));
+    EXPECT_TRUE(fs::exists(sPath));
+
+    fs::remove_all(fs::path(dir).parent_path());
+}
+
+// ── Phase 3: reprocess() during modification ─────────────────────────────────
+
+TEST_F(FilterChainTest, AppendDuringReprocessRestarts) {
+    // Start a reprocess with first filter "line" (matches 8 lines)
+    chain_.append({.pattern = "line"});
+    std::promise<void> done1;
+    chain_.reprocess(0, nullptr, [&]{ done1.set_value(); });
+
+    // Immediately append another filter; this cancels + restarts reprocess.
+    // Second filter "1" applied to the 8 "lineN" lines matches "line1" and
+    // "line10", so the final filtered count is 2.
+    chain_.append({.pattern = "1"});
+    std::promise<void> done2;
+    chain_.reprocess(0, nullptr, [&]{ done2.set_value(); });
+    waitForReprocess(done2);
+
+    // Both filters should be active and produce a consistent non-zero result
+    EXPECT_EQ(chain_.filterCount(), 2u);
+    EXPECT_GT(chain_.filteredLineCount(), 0u);
 }

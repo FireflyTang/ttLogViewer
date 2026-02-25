@@ -20,6 +20,10 @@ add_executable(ttLogViewer_tests
     e2e/navigation_test.cpp
     e2e/search_test.cpp
     e2e/input_flow_test.cpp
+
+    # Phase 3
+    unit/render_utils_test.cpp
+    e2e/session_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE

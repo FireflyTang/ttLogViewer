@@ -1,6 +1,10 @@
 #include "app_controller.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <format>
+#include <fstream>
 #include <regex>
 #include <string>
 
@@ -114,6 +118,8 @@ bool AppController::handleKey(const Event& event) {
             return handleKeyGotoLine(event);
         case InputMode::OpenFile:
             return handleKeyOpenFile(event);
+        case InputMode::ExportConfirm:
+            return handleKeyExportConfirm(event);
         default:
             return false;
     }
@@ -302,6 +308,79 @@ bool AppController::handleModeKeys(const Event& event) {
         reader_.forceCheck();
         return true;
     }
+
+    // ── Phase 3 keys ──────────────────────────────────────────────────────────
+
+    if (event == Event::Character('l')) {
+        showLineNumbers_ = !showLineNumbers_;
+        return true;
+    }
+    if (event == Event::Character('z')) {
+        // Toggle fold for the currently highlighted raw line
+        size_t rawLine = 0;
+        if (focus_ == FocusArea::Raw) {
+            const size_t total = reader_.lineCount();
+            if (total > 0)
+                rawLine = rawState_.cursor + 1;  // cursor is 0-based
+        } else {
+            const size_t total = chain_.filteredLineCount();
+            if (total > 0 && filteredState_.cursor < total)
+                rawLine = chain_.filteredLineAt(filteredState_.cursor);
+        }
+        if (rawLine > 0) {
+            if (foldedLines_.count(rawLine))
+                foldedLines_.erase(rawLine);
+            else
+                foldedLines_.insert(rawLine);
+        }
+        return true;
+    }
+    if (event == Event::Character('h')) {
+        showDialog_  = true;
+        dialogTitle_ = "快捷键帮助";
+        dialogBody_  =
+            "↑↓: 移动光标\n"
+            "PgUp/PgDn: 翻页\n"
+            "Home/End: 首/末行\n"
+            "Tab: 切换区域\n"
+            "a: 添加过滤器\n"
+            "e: 编辑过滤器\n"
+            "d: 删除过滤器\n"
+            "[/]: 选择过滤器\n"
+            "+/-: 调整过滤器顺序\n"
+            "Space: 启停过滤器\n"
+            "/: 搜索\n"
+            "n/p: 下/上一搜索结果\n"
+            "g: 跳转行号\n"
+            "G: 跟随末尾\n"
+            "o: 打开文件\n"
+            "s/r: 静态/实时模式\n"
+            "f: 强制检查\n"
+            "l: 行号显示切换\n"
+            "z: 折叠/展开超长行\n"
+            "w: 导出过滤结果\n"
+            "h: 帮助\n"
+            "q: 退出";
+        dialogHasChoice_ = false;
+        return true;
+    }
+    if (event == Event::Character('w')) {
+        // Generate export filename: <stem>_filtered_<timestamp>.txt
+        std::string fp = std::string(reader_.filePath());
+        if (fp.empty()) return true;  // No file open, nothing to export
+
+        namespace fs = std::filesystem;
+        const std::string stem = fs::path(fp).stem().string();
+        const std::string dir  = fs::path(fp).parent_path().string();
+
+        auto now = std::chrono::system_clock::now();
+        const std::string ts = std::format("{:%Y%m%d_%H%M%S}", now);
+
+        exportPath_ = (dir.empty() ? "." : dir) + "/" +
+                      stem + "_filtered_" + ts + ".txt";
+        enterInputMode(InputMode::ExportConfirm, "Export: ", exportPath_);
+        return true;
+    }
     return false;
 }
 
@@ -437,6 +516,55 @@ bool AppController::handleKeyOpenFile(const Event& event) {
     return handleCommonInputKeys(event, true);
 }
 
+// ── ExportConfirm mode ────────────────────────────────────────────────────────
+
+bool AppController::handleKeyExportConfirm(const Event& event) {
+    if (event == Event::Return) {
+        const std::string path = inputBuffer_;
+        exitInputMode();
+
+        if (path.empty()) return true;
+
+        namespace fs = std::filesystem;
+
+        // Create parent directory if needed
+        std::error_code ec;
+        const auto parent = fs::path(path).parent_path();
+        if (!parent.empty())
+            fs::create_directories(parent, ec);
+        if (ec) {
+            showErrorDialog("导出失败", "无法创建目录:\n" + parent.string());
+            return true;
+        }
+
+        std::ofstream out{path};
+        if (!out) {
+            showErrorDialog("导出失败", "无法写入文件:\n" + path);
+            return true;
+        }
+
+        const size_t filteredCount = chain_.filteredLineCount();
+        if (filteredCount > 0) {
+            // Export filtered lines
+            for (size_t i = 0; i < filteredCount; ++i) {
+                size_t rawLineNo = chain_.filteredLineAt(i);
+                out << reader_.getLine(rawLineNo) << '\n';
+            }
+        } else {
+            // No active filter: export all raw lines
+            const size_t total = reader_.lineCount();
+            for (size_t i = 1; i <= total; ++i)
+                out << reader_.getLine(i) << '\n';
+        }
+
+        showErrorDialog("已保存", "文件已导出到:\n" + path);
+        return true;
+    }
+
+    // Allow editing the path, or press Escape to cancel
+    return handleCommonInputKeys(event, true);
+}
+
 // ── Dialog mode ───────────────────────────────────────────────────────────────
 
 bool AppController::handleKeyDialog(const Event& event) {
@@ -523,6 +651,7 @@ void AppController::buildRawPane(ViewData& data) {
         ll.content     = reader_.getLine(lineNo);
         ll.colors      = chain_.computeColors(lineNo, ll.content);
         ll.highlighted = (first + i == rawState_.cursor) || (lineNo == searchLine);
+        ll.folded      = (foldedLines_.count(lineNo) > 0);
         data.rawPane.push_back(std::move(ll));
     }
 }
@@ -544,6 +673,7 @@ void AppController::buildFilteredPane(ViewData& data) {
         ll.content     = reader_.getLine(rawLineNo);
         ll.colors      = chain_.computeColors(rawLineNo, ll.content);
         ll.highlighted = (first + i == filteredState_.cursor);
+        ll.folded      = (foldedLines_.count(rawLineNo) > 0);
         data.filteredPane.push_back(std::move(ll));
     }
 }
@@ -573,8 +703,10 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.dialogBody      = dialogBody_;
     data.dialogHasChoice = dialogHasChoice_;
 
-    data.showProgress = showProgress_;
-    data.progress     = progress_;
+    data.showProgress    = showProgress_;
+    data.progress        = progress_;
+    data.showLineNumbers = showLineNumbers_;
+    data.terminalWidth   = lastTerminalWidth_;
 
     buildRawPane(data);
     buildFilteredPane(data);
@@ -598,7 +730,8 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
 
 // ── Resize ────────────────────────────────────────────────────────────────────
 
-void AppController::onTerminalResize(int /*width*/, int height) {
+void AppController::onTerminalResize(int width, int height) {
+    if (width > 0) lastTerminalWidth_ = width;
     const int overhead  = 6;
     const int available = std::max(2, height - overhead);
     lastRawPaneHeight_      = available / 2;

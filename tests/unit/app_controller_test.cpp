@@ -192,3 +192,140 @@ TEST_F(AppControllerTest, EmptyFileNoCrash) {
 TEST_F(AppControllerTest, IsInputActiveDefaultFalse) {
     EXPECT_FALSE(ctrl_.isInputActive());
 }
+
+// ── Phase 3: getViewData both panes empty ─────────────────────────────────────
+
+TEST(AppControllerBoundary, GetViewDataNoFileNoCrash) {
+    LogReader   reader;  // Not opened
+    FilterChain chain(reader);
+    AppController ctrl(reader, chain);
+    EXPECT_NO_THROW(ctrl.getViewData(5, 5));
+}
+
+TEST(AppControllerBoundary, GetViewDataBothPanesEmptyFields) {
+    LogReader   reader;
+    FilterChain chain(reader);
+    AppController ctrl(reader, chain);
+    auto d = ctrl.getViewData(5, 5);
+    EXPECT_EQ(d.totalLines, 0u);
+    EXPECT_TRUE(d.rawPane.empty());
+    EXPECT_TRUE(d.filteredPane.empty());
+}
+
+// ── Phase 3: onTerminalResize clamps scroll ───────────────────────────────────
+
+TEST_F(AppControllerTest, OnTerminalResizeCursorStaysVisible) {
+    // Move cursor to end
+    for (int i = 0; i < 20; ++i) key(Event::ArrowDown);
+
+    // Simulate small terminal
+    ctrl_.onTerminalResize(80, 8);
+
+    auto d = ctrl_.getViewData(ctrl_.rawPaneHeight(), ctrl_.filtPaneHeight());
+    // Cursor must be in the visible window
+    bool found = false;
+    for (auto& ll : d.rawPane) if (ll.highlighted) found = true;
+    EXPECT_TRUE(found);
+}
+
+TEST_F(AppControllerTest, OnTerminalResizeStoresWidth) {
+    ctrl_.onTerminalResize(120, 30);
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(d.terminalWidth, 120);
+}
+
+// ── Phase 3: InputMode state no bleed ────────────────────────────────────────
+
+TEST_F(AppControllerTest, InputModeBufferClearedOnExit) {
+    key(Event::Character('a'));
+    for (char c : std::string("hello"))
+        key(Event::Character(std::string(1, c)));
+    key(Event::Escape);
+
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::None);
+    EXPECT_TRUE(d.inputBuffer.empty());
+}
+
+TEST_F(AppControllerTest, MultipleInputModeSwitchesNoBleed) {
+    // Enter filter add, type something, escape
+    key(Event::Character('a'));
+    key(Event::Character('x'));
+    key(Event::Escape);
+
+    // Enter goto line, type something, escape
+    key(Event::Character('g'));
+    key(Event::Character('5'));
+    key(Event::Escape);
+
+    // Enter open file, type something, escape
+    key(Event::Character('o'));
+    key(Event::Character('z'));
+    key(Event::Escape);
+
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::None);
+    EXPECT_TRUE(d.inputBuffer.empty());
+}
+
+// ── Phase 3: l / z / h key handlers ──────────────────────────────────────────
+
+TEST_F(AppControllerTest, LKeyTogglesLineNumbers) {
+    EXPECT_FALSE(data().showLineNumbers);
+    key(Event::Character('l'));
+    EXPECT_TRUE(data().showLineNumbers);
+    key(Event::Character('l'));
+    EXPECT_FALSE(data().showLineNumbers);
+}
+
+TEST_F(AppControllerTest, ZKeyFoldsCurrentLine) {
+    // Cursor is on line 1
+    auto d0 = data();
+    bool foldedBefore = false;
+    for (auto& ll : d0.rawPane) if (ll.highlighted) foldedBefore = ll.folded;
+    EXPECT_FALSE(foldedBefore);
+
+    key(Event::Character('z'));
+    auto d1 = data();
+    bool foldedAfter = false;
+    for (auto& ll : d1.rawPane) if (ll.highlighted) foldedAfter = ll.folded;
+    EXPECT_TRUE(foldedAfter);
+
+    // Second z unfolds
+    key(Event::Character('z'));
+    auto d2 = data();
+    bool foldedAgain = false;
+    for (auto& ll : d2.rawPane) if (ll.highlighted) foldedAgain = ll.folded;
+    EXPECT_FALSE(foldedAgain);
+}
+
+TEST_F(AppControllerTest, ZKeyDoesNotAffectOtherLines) {
+    // Move to line 3, fold it
+    key(Event::ArrowDown);
+    key(Event::ArrowDown);
+    key(Event::Character('z'));
+
+    // Move to line 1 – should NOT be folded
+    key(Event::ArrowUp);
+    key(Event::ArrowUp);
+    auto d = data();
+    for (auto& ll : d.rawPane)
+        if (ll.rawLineNo == 1) { EXPECT_FALSE(ll.folded); }
+}
+
+TEST_F(AppControllerTest, HKeyShowsHelpDialog) {
+    key(Event::Character('h'));
+    auto d = data();
+    EXPECT_TRUE(d.showDialog);
+    EXPECT_FALSE(d.dialogHasChoice);
+    // Dialog body should contain key descriptions
+    EXPECT_NE(d.dialogBody.find("↑↓"), std::string::npos);
+    EXPECT_NE(d.dialogBody.find("q"), std::string::npos);
+}
+
+TEST_F(AppControllerTest, HKeyDialogClosesOnAnyKey) {
+    key(Event::Character('h'));
+    EXPECT_TRUE(data().showDialog);
+    key(Event::Character(' '));  // Any key closes the dialog
+    EXPECT_FALSE(data().showDialog);
+}

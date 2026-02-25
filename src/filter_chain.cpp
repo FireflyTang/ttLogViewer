@@ -1,6 +1,7 @@
 #include "filter_chain.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <stdexcept>
 
@@ -389,6 +390,12 @@ bool FilterChain::load(std::string_view path) {
         }
 
         filters_ = std::move(newFilters);
+
+        // Read optional session fields
+        sessionLastFile_ = j.value("lastFile", "");
+        const std::string modeStr = j.value("mode", "static");
+        sessionMode_ = (modeStr == "realtime") ? FileMode::Realtime : FileMode::Static;
+
         return true;
     } catch (const std::regex_error&) {
         // Invalid regex pattern in saved filters
@@ -400,4 +407,37 @@ bool FilterChain::load(std::string_view path) {
         // Other standard exceptions (file I/O, etc.)
         return false;
     }
+}
+
+void FilterChain::save(std::string_view path,
+                        std::string_view lastFile,
+                        FileMode         mode) const {
+    // Ensure parent directory exists
+    namespace fs = std::filesystem;
+    const fs::path filePath{std::string{path}};
+    const auto parent = filePath.parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+        // Continue even if create_directories fails (e.g., path already exists)
+    }
+
+    json j;
+    j["version"]  = 1;
+    j["lastFile"] = std::string{lastFile};
+    j["mode"]     = (mode == FileMode::Realtime) ? "realtime" : "static";
+
+    json arr = json::array();
+    for (const auto& node : filters_) {
+        json f;
+        f["pattern"] = node.def.pattern;
+        f["color"]   = node.def.color;
+        f["enabled"] = node.def.enabled;
+        f["exclude"] = node.def.exclude;
+        arr.push_back(std::move(f));
+    }
+    j["filters"] = std::move(arr);
+
+    std::ofstream out{std::string{path}};
+    if (out) out << j.dump(2);
 }

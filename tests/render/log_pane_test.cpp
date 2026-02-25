@@ -116,3 +116,76 @@ TEST(LogPaneRender, NoFileOpenNoCrash) {
     FilterChain chain(reader);
     EXPECT_NO_THROW(renderToString(reader, chain));
 }
+
+// ── Phase 3: line number display ─────────────────────────────────────────────
+
+TEST(LogPaneRender, LineNumbersShownAfterLKey) {
+    TempFile f("alpha\nbeta\n");
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(60, 20);
+
+    // Press 'l' to toggle line numbers on
+    ctrl.handleKey(Event::Character('l'));
+
+    Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(20));
+    Render(s, comp->Render());
+    std::string out = s.ToString();
+
+    // Line 1 number should appear
+    EXPECT_NE(out.find("1 "), std::string::npos);
+}
+
+TEST(LogPaneRender, LineNumbersHiddenByDefault) {
+    TempFile f("alpha\nbeta\n");
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(60, 20);
+
+    Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(20));
+    Render(s, comp->Render());
+    std::string out = s.ToString();
+
+    // Line numbers should not appear as leading "1 " before content
+    // (The marker "▶ " is present but not a bare digit-space)
+    // We check ViewData directly instead
+    EXPECT_FALSE(ctrl.getViewData(5, 5).showLineNumbers);
+}
+
+// ── Phase 3: folded line shows ellipsis ──────────────────────────────────────
+
+TEST(LogPaneRender, FoldedLineShowsEllipsis) {
+    // Create a line longer than the terminal width
+    std::string longLine(100, 'x');
+    TempFile f(longLine + "\n");
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(40, 20);
+
+    // Press 'z' to fold the current (first) line
+    ctrl.handleKey(Event::Character('z'));
+
+    Screen s = Screen::Create(Dimension::Fixed(40), Dimension::Fixed(20));
+    Render(s, comp->Render());
+    std::string out = s.ToString();
+
+    EXPECT_NE(out.find("…"), std::string::npos);
+}
