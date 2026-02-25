@@ -25,6 +25,9 @@ add_executable(ttLogViewer_tests
     unit/render_utils_test.cpp
     e2e/session_test.cpp
     e2e/comprehensive_test.cpp
+
+    # Config system
+    unit/app_config_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE

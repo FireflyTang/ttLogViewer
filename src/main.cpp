@@ -6,6 +6,7 @@
 
 #include <ftxui/component/screen_interactive.hpp>
 
+#include "app_config.hpp"
 #include "app_controller.hpp"
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
@@ -27,6 +28,10 @@ static std::string sessionPath() {
 }
 
 int main(int argc, char* argv[]) {
+    // Load user config overrides before anything else.
+    // A missing or unparseable config file is silently ignored (all defaults apply).
+    AppConfig::loadGlobal();
+
     LogReader     reader;
     FilterChain   chain(reader);
     AppController controller(reader, chain);

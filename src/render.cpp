@@ -11,6 +11,8 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 
+#include "app_config.hpp"
+
 using namespace ftxui;
 
 // Format a number with thousands separators, e.g. 1234567 → "1,234,567".
@@ -151,7 +153,7 @@ static Element renderDialogOverlay(const ViewData& data, Element base) {
     });
 
     Element dialog = window(text(""), body)
-                   | size(WIDTH, LESS_THAN, 60)
+                   | size(WIDTH, LESS_THAN, AppConfig::global().dialogMaxWidth)
                    | clear_under | center;
 
     return dbox({ base, dialog });

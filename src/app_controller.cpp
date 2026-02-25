@@ -8,7 +8,37 @@
 #include <regex>
 #include <string>
 
+#include "app_config.hpp"
+
 using namespace ftxui;
+
+// ── File-scope constants ───────────────────────────────────────────────────────
+
+// Full help text shown by the 'h' key.  Extracted here to keep handleModeKeys()
+// readable and to make it easy to update the text in one place.
+static constexpr std::string_view kHelpText =
+    "↑↓: 移动光标\n"
+    "PgUp/PgDn: 翻页\n"
+    "Home/End: 首/末行\n"
+    "Tab: 切换区域\n"
+    "a: 添加过滤器\n"
+    "e: 编辑过滤器\n"
+    "d: 删除过滤器\n"
+    "[/]: 选择过滤器\n"
+    "+/-: 调整过滤器顺序\n"
+    "Space: 启停过滤器\n"
+    "/: 搜索\n"
+    "n/p: 下/上一搜索结果\n"
+    "g: 跳转行号\n"
+    "G: 跟随末尾\n"
+    "o: 打开文件\n"
+    "s/r: 静态/实时模式\n"
+    "f: 强制检查\n"
+    "l: 行号显示切换\n"
+    "z: 折叠/展开超长行\n"
+    "w: 导出过滤结果\n"
+    "h: 帮助\n"
+    "q: 退出";
 
 // ── AppController ──────────────────────────────────────────────────────────────
 
@@ -175,25 +205,16 @@ bool AppController::handleFilterKeys(const Event& event) {
     }
     if (event == Event::Character('e')) {
         if (chain_.filterCount() == 0) return true;
-        // Ensure selectedFilter_ is in valid range
-        if (selectedFilter_ >= chain_.filterCount()) {
-            selectedFilter_ = chain_.filterCount() > 0 ? chain_.filterCount() - 1 : 0;
-        }
+        clampSelectedFilter();
         const FilterDef& def = chain_.filterAt(selectedFilter_);
         enterInputMode(InputMode::FilterEdit, "Edit> ", def.pattern);
         return true;
     }
     if (event == Event::Character('d')) {
         if (chain_.filterCount() == 0) return true;
-        // Validate selectedFilter_ before deletion
-        if (selectedFilter_ >= chain_.filterCount()) {
-            selectedFilter_ = chain_.filterCount() - 1;
-        }
+        clampSelectedFilter();
         chain_.remove(selectedFilter_);
-        // Adjust selection after deletion
-        if (selectedFilter_ >= chain_.filterCount() && chain_.filterCount() > 0) {
-            selectedFilter_ = chain_.filterCount() - 1;
-        }
+        clampSelectedFilter();
         triggerReprocess(0);
         return true;
     }
@@ -225,10 +246,7 @@ bool AppController::handleFilterKeys(const Event& event) {
     }
     if (event == Event::Character(' ')) {
         if (chain_.filterCount() > 0) {
-            // Validate selectedFilter_ before access
-            if (selectedFilter_ >= chain_.filterCount()) {
-                selectedFilter_ = chain_.filterCount() - 1;
-            }
+            clampSelectedFilter();
             FilterDef def = chain_.filterAt(selectedFilter_);
             def.enabled   = !def.enabled;
             chain_.edit(selectedFilter_, std::move(def));
@@ -245,29 +263,11 @@ bool AppController::handleSearchKeys(const Event& event) {
         return true;
     }
     if (event == Event::Character('n')) {
-        const size_t resultCount = searchResults_.size();
-        if (resultCount > 0) {
-            // Ensure searchIndex_ is valid before incrementing
-            if (searchIndex_ >= resultCount) {
-                searchIndex_ = 0;
-            } else {
-                searchIndex_ = (searchIndex_ + 1) % resultCount;
-            }
-            jumpToSearchResult(searchIndex_);
-        }
+        stepSearch(+1);
         return true;
     }
     if (event == Event::Character('p')) {
-        const size_t resultCount = searchResults_.size();
-        if (resultCount > 0) {
-            // Ensure searchIndex_ is valid before decrementing
-            if (searchIndex_ >= resultCount) {
-                searchIndex_ = resultCount - 1;
-            } else {
-                searchIndex_ = (searchIndex_ == 0) ? resultCount - 1 : searchIndex_ - 1;
-            }
-            jumpToSearchResult(searchIndex_);
-        }
+        stepSearch(-1);
         return true;
     }
     if (event == Event::Character('g')) {
@@ -316,51 +316,13 @@ bool AppController::handleModeKeys(const Event& event) {
         return true;
     }
     if (event == Event::Character('z')) {
-        // Toggle fold for the currently highlighted raw line
-        size_t rawLine = 0;
-        if (focus_ == FocusArea::Raw) {
-            const size_t total = reader_.lineCount();
-            if (total > 0)
-                rawLine = rawState_.cursor + 1;  // cursor is 0-based
-        } else {
-            const size_t total = chain_.filteredLineCount();
-            if (total > 0 && filteredState_.cursor < total)
-                rawLine = chain_.filteredLineAt(filteredState_.cursor);
-        }
-        if (rawLine > 0) {
-            if (foldedLines_.count(rawLine))
-                foldedLines_.erase(rawLine);
-            else
-                foldedLines_.insert(rawLine);
-        }
+        toggleFoldCurrentLine();
         return true;
     }
     if (event == Event::Character('h')) {
-        showDialog_  = true;
-        dialogTitle_ = "快捷键帮助";
-        dialogBody_  =
-            "↑↓: 移动光标\n"
-            "PgUp/PgDn: 翻页\n"
-            "Home/End: 首/末行\n"
-            "Tab: 切换区域\n"
-            "a: 添加过滤器\n"
-            "e: 编辑过滤器\n"
-            "d: 删除过滤器\n"
-            "[/]: 选择过滤器\n"
-            "+/-: 调整过滤器顺序\n"
-            "Space: 启停过滤器\n"
-            "/: 搜索\n"
-            "n/p: 下/上一搜索结果\n"
-            "g: 跳转行号\n"
-            "G: 跟随末尾\n"
-            "o: 打开文件\n"
-            "s/r: 静态/实时模式\n"
-            "f: 强制检查\n"
-            "l: 行号显示切换\n"
-            "z: 折叠/展开超长行\n"
-            "w: 导出过滤结果\n"
-            "h: 帮助\n"
-            "q: 退出";
+        showDialog_      = true;
+        dialogTitle_     = "快捷键帮助";
+        dialogBody_      = std::string(kHelpText);
         dialogHasChoice_ = false;
         return true;
     }
@@ -732,7 +694,7 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
 
 void AppController::onTerminalResize(int width, int height) {
     if (width > 0) lastTerminalWidth_ = width;
-    const int overhead  = 6;
+    const int overhead  = AppConfig::global().uiOverheadRows;
     const int available = std::max(2, height - overhead);
     lastRawPaneHeight_      = available / 2;
     lastFilteredPaneHeight_ = available - lastRawPaneHeight_;
@@ -863,9 +825,13 @@ void AppController::runSearch(const std::string& keyword) {
     if (keyword.empty()) return;
 
     const size_t total = reader_.lineCount();
-    // Reserve space to avoid frequent reallocations during search
-    // Estimate: most searches match <10% of lines, but reserve conservatively
-    searchResults_.reserve(std::min(total / 10, size_t(10000)));
+    // Reserve space to avoid frequent reallocations during search.
+    // Estimate: most searches match fewer than 1/searchReserveFraction of lines,
+    // but we cap the allocation at searchReserveMax on very large files.
+    const size_t reserveEstimate = total / static_cast<size_t>(
+        AppConfig::global().searchReserveFraction);
+    searchResults_.reserve(std::min(reserveEstimate,
+                                    AppConfig::global().searchReserveMax));
 
     for (size_t i = 1; i <= total; ++i) {
         std::string_view line = reader_.getLine(i);
@@ -883,4 +849,53 @@ void AppController::runSearch(const std::string& keyword) {
 void AppController::jumpToSearchResult(size_t idx) {
     if (idx >= searchResults_.size()) return;
     jumpToRawLine(searchResults_[idx]);
+}
+
+// ── stepSearch ────────────────────────────────────────────────────────────────
+
+void AppController::stepSearch(int dir) {
+    const size_t resultCount = searchResults_.size();
+    if (resultCount == 0) return;
+
+    if (searchIndex_ >= resultCount) {
+        // Index became stale (e.g. after a new search with fewer results).
+        // Reset to a valid boundary before stepping.
+        searchIndex_ = (dir >= 0) ? 0 : resultCount - 1;
+    } else if (dir >= 0) {
+        searchIndex_ = (searchIndex_ + 1) % resultCount;
+    } else {
+        searchIndex_ = (searchIndex_ == 0) ? resultCount - 1 : searchIndex_ - 1;
+    }
+    jumpToSearchResult(searchIndex_);
+}
+
+// ── clampSelectedFilter ───────────────────────────────────────────────────────
+
+void AppController::clampSelectedFilter() {
+    if (chain_.filterCount() == 0) {
+        selectedFilter_ = 0;
+    } else if (selectedFilter_ >= chain_.filterCount()) {
+        selectedFilter_ = chain_.filterCount() - 1;
+    }
+}
+
+// ── toggleFoldCurrentLine ─────────────────────────────────────────────────────
+
+void AppController::toggleFoldCurrentLine() {
+    size_t rawLine = 0;
+    if (focus_ == FocusArea::Raw) {
+        const size_t total = reader_.lineCount();
+        if (total > 0)
+            rawLine = rawState_.cursor + 1;  // cursor is 0-based
+    } else {
+        const size_t total = chain_.filteredLineCount();
+        if (total > 0 && filteredState_.cursor < total)
+            rawLine = chain_.filteredLineAt(filteredState_.cursor);
+    }
+    if (rawLine > 0) {
+        if (foldedLines_.count(rawLine))
+            foldedLines_.erase(rawLine);
+        else
+            foldedLines_.insert(rawLine);
+    }
 }

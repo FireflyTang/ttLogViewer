@@ -215,10 +215,19 @@ private:
     void triggerReprocess(size_t fromFilter = 0);
     void showErrorDialog(std::string title, std::string body);
     void closeDialog();
+    // Clamp selectedFilter_ to [0, filterCount()-1].  Called after any
+    // operation that might leave selectedFilter_ pointing past the end.
+    void clampSelectedFilter();
 
-    // ── Search helper ─────────────────────────────────────────────────────────
+    // ── Search helpers ────────────────────────────────────────────────────────
     void runSearch(const std::string& keyword);
     void jumpToSearchResult(size_t idx);
+    // Step through search results by direction (+1 forward, -1 backward).
+    void stepSearch(int dir);
+
+    // ── Phase 3 helpers ───────────────────────────────────────────────────────
+    // Toggle fold state for the line currently under the cursor.
+    void toggleFoldCurrentLine();
 
     // ── getViewData helpers ────────────────────────────────────────────────────
     void buildRawPane(ViewData& data);

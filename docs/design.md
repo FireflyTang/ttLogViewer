@@ -1022,3 +1022,74 @@ while (!stopped_) {
 - **过滤器分组/预设**：不支持保存多套过滤链配置
 - **书签**：不支持标记和跳转行
 - **结构化列解析**：不支持将日志解析为结构化字段（时间戳、级别等列）
+
+---
+
+## 配置系统
+
+### 概述
+
+`AppConfig` 是全局单例结构体，收录所有可调参数（原代码中散落的魔法数字）。
+程序在 `main()` 入口处调用 `AppConfig::loadGlobal()` 加载配置，随后所有模块通过 `AppConfig::global()` 读取。
+
+### 加载优先级
+
+```
+编译期默认值  <  配置文件（JSON 字段覆盖）
+```
+
+- 配置文件不存在 → 全部使用默认值，静默跳过
+- 配置文件存在但 JSON 无效 → 全部使用默认值，不崩溃
+- 配置文件中缺失的字段 → 该字段保持默认值
+
+### 配置文件路径
+
+| 平台 | 默认路径 |
+|------|----------|
+| Windows | `%USERPROFILE%\.ttlogviewer.json` |
+| Linux / macOS | `$HOME/.ttlogviewer.json` |
+
+`loadGlobal(path)` 也接受自定义路径，供测试或高级用户使用。
+
+### 字段表
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `uiOverheadRows` | `int` | `6` | 状态栏 + 过滤栏 + 分隔线 + 输入行 + 分割线占用的行数 |
+| `dialogMaxWidth` | `int` | `60` | 对话框最大列宽 |
+| `defaultTerminalWidth` | `int` | `80` | 首次 resize 事件到来前的终端宽度回退值 |
+| `watcherTickCount` | `int` | `50` | 每次文件检测轮询的 tick 次数 |
+| `watcherTickIntervalMs` | `int` | `10` | 每个 tick 的间隔（毫秒）；默认 50×10ms = 500ms 检测周期 |
+| `searchReserveFraction` | `int` | `10` | 搜索结果预分配：预留 `总行数 / N` 的容量 |
+| `searchReserveMax` | `size_t` | `10000` | 搜索结果预分配上限 |
+| `jsonIndent` | `int` | `2` | 会话 JSON 文件的缩进空格数 |
+
+### JSON Schema 示例
+
+```json
+{
+  "uiOverheadRows":        6,
+  "dialogMaxWidth":        60,
+  "defaultTerminalWidth":  80,
+  "watcherTickCount":      50,
+  "watcherTickIntervalMs": 10,
+  "searchReserveFraction": 10,
+  "searchReserveMax":      10000,
+  "jsonIndent":            2
+}
+```
+
+### API
+
+```cpp
+// 读取全局配置（只读引用）
+const AppConfig& cfg = AppConfig::global();
+
+// 程序启动时初始化（main() 首行调用）
+AppConfig::loadGlobal();                     // 默认路径
+AppConfig::loadGlobal("/path/to/cfg.json");  // 自定义路径
+
+// 实例方法（测试用，不影响全局单例）
+AppConfig cfg;
+bool ok = cfg.loadFromFile("/path/to/cfg.json");
+```

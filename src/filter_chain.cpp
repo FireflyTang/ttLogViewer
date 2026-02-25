@@ -7,6 +7,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "app_config.hpp"
+
 using json = nlohmann::json;
 
 // ── Default color palette ──────────────────────────────────────────────────────
@@ -344,11 +346,14 @@ void FilterChain::waitReprocess() {
         reprocessThread_.join();
 }
 
-void FilterChain::save(std::string_view path) const {
-    json j;
-    j["version"] = 1;
+// ── buildFiltersJson ──────────────────────────────────────────────────────────
+//
+// Shared serialisation helper for both save() overloads.
+// Returns a JSON array containing one object per filter node.
+
+static json buildFiltersJson(const std::vector<FilterNode>& filters) {
     json arr = json::array();
-    for (const auto& node : filters_) {
+    for (const auto& node : filters) {
         json f;
         f["pattern"] = node.def.pattern;
         f["color"]   = node.def.color;
@@ -356,11 +361,34 @@ void FilterChain::save(std::string_view path) const {
         f["exclude"] = node.def.exclude;
         arr.push_back(std::move(f));
     }
-    j["filters"] = std::move(arr);
+    return arr;
+}
 
-    std::string pathStr{path};
-    std::ofstream out{pathStr};
-    if (out) out << j.dump(2);
+// ── ensureParentDir ───────────────────────────────────────────────────────────
+//
+// Creates the parent directory of `path` if it does not already exist.
+// Silently ignores errors (e.g. the path already exists).
+
+static void ensureParentDir(const std::filesystem::path& filePath) {
+    const auto parent = filePath.parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(parent, ec);
+    }
+}
+
+// ── save() overloads ──────────────────────────────────────────────────────────
+
+void FilterChain::save(std::string_view path) const {
+    const std::filesystem::path filePath{std::string{path}};
+    ensureParentDir(filePath);
+
+    json j;
+    j["version"]  = 1;
+    j["filters"]  = buildFiltersJson(filters_);
+
+    std::ofstream out{filePath};
+    if (out) out << j.dump(AppConfig::global().jsonIndent);
 }
 
 bool FilterChain::load(std::string_view path) {
@@ -412,32 +440,15 @@ bool FilterChain::load(std::string_view path) {
 void FilterChain::save(std::string_view path,
                         std::string_view lastFile,
                         FileMode         mode) const {
-    // Ensure parent directory exists
-    namespace fs = std::filesystem;
-    const fs::path filePath{std::string{path}};
-    const auto parent = filePath.parent_path();
-    if (!parent.empty()) {
-        std::error_code ec;
-        fs::create_directories(parent, ec);
-        // Continue even if create_directories fails (e.g., path already exists)
-    }
+    const std::filesystem::path filePath{std::string{path}};
+    ensureParentDir(filePath);
 
     json j;
     j["version"]  = 1;
     j["lastFile"] = std::string{lastFile};
     j["mode"]     = (mode == FileMode::Realtime) ? "realtime" : "static";
+    j["filters"]  = buildFiltersJson(filters_);
 
-    json arr = json::array();
-    for (const auto& node : filters_) {
-        json f;
-        f["pattern"] = node.def.pattern;
-        f["color"]   = node.def.color;
-        f["enabled"] = node.def.enabled;
-        f["exclude"] = node.def.exclude;
-        arr.push_back(std::move(f));
-    }
-    j["filters"] = std::move(arr);
-
-    std::ofstream out{std::string{path}};
-    if (out) out << j.dump(2);
+    std::ofstream out{filePath};
+    if (out) out << j.dump(AppConfig::global().jsonIndent);
 }

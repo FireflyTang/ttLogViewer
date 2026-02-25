@@ -9,7 +9,11 @@
 - **实时追踪**：实时模式监控文件追加，`G` 键锁定跟随最新行
 - **颜色标记**：每个过滤器对应独立颜色，匹配内容高亮显示
 - **双区视图**：上半显示原始日志，下半显示过滤结果，两区独立滚动
-- **配置持久化**：过滤链自动保存，下次启动自动恢复
+- **会话持久化**：过滤链 + 上次打开文件自动保存，下次启动自动恢复
+- **搜索**：关键字搜索，`n`/`p` 前后跳转，匹配行高亮
+- **行号 & 折叠**：`l` 切换行号，`z` 折叠/展开超长行
+- **导出**：`w` 将当前过滤结果导出为文件
+- **用户配置**：`~/.ttlogviewer.json` 可覆盖 UI 布局、搜索、Watcher 等参数
 
 ## 使用方法
 
@@ -51,8 +55,58 @@ cmake -B build -G Ninja \
 
 编译产物：`build/bin/ttLogViewer`（Windows 为 `ttLogViewer.exe`）
 
+## 快捷键速查
+
+| 键 | 功能 |
+|----|------|
+| `h` | 显示帮助 |
+| `↑` / `↓` | 上下移动光标 |
+| `PgUp` / `PgDn` | 翻页 |
+| `g` | 跳转到指定行号 |
+| `G` | 跳转到末尾（实时模式下锁定跟随） |
+| `Tab` | 切换原始 / 过滤 窗格焦点 |
+| `a` | 添加过滤器 |
+| `e` | 编辑当前过滤器 |
+| `d` | 删除当前过滤器 |
+| `Space` | 启用 / 禁用当前过滤器 |
+| `[` / `]` | 上 / 下选择过滤器 |
+| `/` | 搜索关键字 |
+| `n` / `p` | 跳转到下 / 上一个搜索结果 |
+| `r` | 切换实时模式 |
+| `o` | 打开文件 |
+| `l` | 切换行号显示 |
+| `z` | 折叠 / 展开当前行 |
+| `w` | 导出过滤结果 |
+| `q` | 退出 |
+
+## 用户配置
+
+启动时从以下路径加载可选 JSON 配置文件（文件不存在时静默跳过）：
+
+- **Windows**：`%USERPROFILE%\.ttlogviewer.json`
+- **Linux / macOS**：`$HOME/.ttlogviewer.json`
+
+所有字段均可选，只需覆盖需要修改的值：
+
+```json
+{
+  "uiOverheadRows":       6,
+  "dialogMaxWidth":       60,
+  "defaultTerminalWidth": 80,
+  "watcherTickCount":     50,
+  "watcherTickIntervalMs":10,
+  "searchReserveFraction":10,
+  "searchReserveMax":     10000,
+  "jsonIndent":           2
+}
+```
+
 ## 开发状态
 
-当前阶段：接口设计完成，测试方案设计中。
+**v0.9 — 全部三阶段实现完成**（226 个测试，全部通过）
 
-详细设计文档见 [docs/design.md](docs/design.md)。
+- 阶段一：框架搭建 + 静态文件浏览 ✓
+- 阶段二：过滤链 + 搜索 + 实时监控 ✓
+- 阶段三：辅助功能 + 会话持久化 + 配置系统 ✓
+
+详细设计文档见 [docs/design.md](docs/design.md)；实现报告见 [docs/implementation.md](docs/implementation.md)。

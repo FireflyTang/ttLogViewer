@@ -1,0 +1,392 @@
+# ttLogViewer 实现报告
+
+> 版本：v0.9（三阶段实现完成）
+> 测试：226 个，全部通过
+> 最后更新：2026-02
+
+本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
+
+---
+
+## 1. 架构总览
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        渲染层 (render.cpp)                   │
+│  CreateMainComponent()  ←  ViewData snapshot  ← getViewData │
+└────────────────────────┬────────────────────────────────────┘
+                         │ handleKey()
+┌────────────────────────▼────────────────────────────────────┐
+│                  AppController (app_controller.cpp)          │
+│  PaneState×2 · InputMode状态机 · 搜索 · 折叠 · 对话框       │
+└──────┬───────────────────────────────────────┬──────────────┘
+       │                                       │
+┌──────▼──────────────────┐    ┌───────────────▼──────────────┐
+│   FilterChain            │    │        LogReader              │
+│  (filter_chain.cpp)      │    │     (log_reader.cpp)          │
+│  FilterNode×N · reprocess│    │  mmap · IndexThread           │
+│  stage cache · JSON 持久  │    │  FileWatcher · 双模式         │
+└──────────────────────────┘    └──────────────────────────────┘
+```
+
+### 数据流
+
+**Pull 流（渲染时）**：`render.cpp` 调用 `controller.getViewData(h1, h2)` → controller 从 `reader_.getLine()` 和 `chain_.filteredLines()` 取数据 → 组装 `ViewData` 快照 → render 纯粹绘制。
+
+**Push 流（文件变化时）**：`FileWatcher` 侦测到大小变化 → `PostEvent` 回 UI 线程 → `handleNewLines()` 触发 `chain_.processNewLines()` → `chain_` 增量追加输出 → 下一帧 `getViewData` 自动包含新行。
+
+---
+
+## 2. 文件组织
+
+```
+ttLogViewer/
+├── include/                    # 所有头文件（接口优先）
+│   ├── i_log_reader.hpp        # LogReader 抽象接口（测试用 mock 基类）
+│   ├── i_filter_chain.hpp      # FilterChain 抽象接口
+│   ├── log_reader.hpp          # LogReader 实现声明（111行）
+│   ├── filter_chain.hpp        # FilterChain + FilterNode（108行）
+│   ├── app_controller.hpp      # AppController + ViewData + PaneState（235行）
+│   ├── app_config.hpp          # AppConfig 全局配置单例（75行）
+│   ├── render.hpp              # CreateMainComponent 声明（11行）
+│   └── render_utils.hpp        # renderColoredLine 等工具（37行）
+│
+├── src/                        # 实现文件
+│   ├── main.cpp                # 入口：loadGlobal → 构造四层 → screen.Loop（74行）
+│   ├── log_reader.cpp          # mmap + IndexThread + FileWatcher（397行）
+│   ├── filter_chain.cpp        # FilterNode 链 + ReprocessThread（454行）
+│   ├── app_controller.cpp      # 键盘分发 + 状态管理（901行）
+│   ├── render.cpp              # FTXUI 组件树组装（230行）
+│   ├── render_utils.cpp        # UTF-8 颜色渲染工具（81行）
+│   ├── app_config.cpp          # JSON 配置加载（68行）
+│   └── CMakeLists.txt
+│
+├── tests/
+│   ├── helpers/                # 共享测试基础设施
+│   │   ├── mock_log_reader.hpp    # MockLogReader（GMock）
+│   │   ├── mock_filter_chain.hpp  # MockFilterChain（GMock）
+│   │   ├── render_test_base.hpp   # FTXUI Screen 渲染 helper
+│   │   ├── temp_file.hpp          # RAII 临时文件
+│   │   └── test_utils.hpp         # 通用断言 helper
+│   ├── unit/                   # 单元测试（孤立类）
+│   │   ├── log_reader_test.cpp
+│   │   ├── filter_chain_test.cpp
+│   │   ├── app_controller_test.cpp
+│   │   ├── render_utils_test.cpp
+│   │   └── app_config_test.cpp
+│   ├── render/                 # 渲染快照测试
+│   │   ├── log_pane_test.cpp
+│   │   ├── status_bar_test.cpp
+│   │   ├── filter_bar_test.cpp
+│   │   ├── input_line_test.cpp
+│   │   ├── dialog_overlay_test.cpp
+│   │   └── progress_overlay_test.cpp
+│   └── e2e/                    # 端到端测试（真实四层）
+│       ├── file_open_test.cpp
+│       ├── filter_workflow_test.cpp
+│       ├── realtime_test.cpp
+│       ├── navigation_test.cpp
+│       ├── search_test.cpp
+│       ├── input_flow_test.cpp
+│       ├── session_test.cpp
+│       └── comprehensive_test.cpp
+│
+├── docs/
+│   ├── design.md               # 完整设计文档（功能 + 接口 + 测试 + 配置）
+│   ├── implementation.md       # 本文件（实现报告）
+│   ├── phase1/2/3.md           # 各阶段实现计划（历史参考）
+│   └── review_notes.md         # 早期设计审查（已解决，可归档）
+│
+├── examples/                   # 示例日志文件（测试用）
+├── CMakeLists.txt              # 根构建文件
+└── CLAUDE.md                   # Claude 开发规范
+```
+
+---
+
+## 3. 类报告
+
+### 3.1 AppConfig
+
+**职责**：全局可调参数的唯一来源，消除代码中散落的魔法数字。
+
+**字段**（见 design.md → 配置系统）：8 个字段，涵盖 UI 布局、文件监控、搜索预分配、JSON 格式。
+
+**设计要点**：
+- 全局单例 `s_config`（`app_config.cpp` 文件作用域），通过 `AppConfig::global()` 只读访问
+- `loadFromFile(path)` 是实例方法（不碰全局），测试可安全构造本地 `AppConfig` 对象
+- 用 `j.value(key, currentValue)` 逐字段覆盖，缺失字段保持默认——**不会因 partial JSON 崩溃**
+- 头文件不引入 `nlohmann/json.hpp`（避免传染依赖），JSON 解析全在 `.cpp` 文件内
+
+### 3.2 LogReader
+
+**职责**：mmap 文件访问、后台行索引建立、文件变更侦测、双模式（Static / Realtime）切换。
+
+**关键实现**：
+
+```
+open(path)
+  └─ mmap 文件 → MmapRegion (shared_ptr)
+  └─ 启动 IndexThread → 扫描换行符 → lineOffsets_[]
+  └─ 实时模式：启动 FileWatcher 线程
+     └─ 每 watcherTickCount × watcherTickIntervalMs 检测文件大小
+     └─ 大小变化 → PostEvent → UI线程 remap + handleNewLines()
+```
+
+**线程安全**：
+- `lineOffsets_` 是 `vector<uint64_t>`，不加锁——通过 `atomic<size_t> lineCount_` 做 release/acquire 序列化：IndexThread 写完一行偏移后 `lineCount_.fetch_add(1, release)`；UI 线程读前先 `lineCount_.load(acquire)`，确保读到完整偏移。
+- `getLine(n)` 返回 `string_view`，指向当前 `MmapRegion`；remap 在 UI 线程执行，所以与 `getLine` 调用不会并发。
+- SearchThread 持有 `shared_ptr<MmapRegion>` 副本，防止搜索期间 remap 释放旧内存区域（dangling view）。
+
+**mmap 平台差异**：
+- POSIX：`mmap()` / `munmap()`
+- Windows：`CreateFileMapping()` / `MapViewOfFile()` / `UnmapViewOfFile()`
+
+### 3.3 FilterChain
+
+**职责**：链式正则过滤，阶段缓存，后台 reprocess，JSON 持久化。
+
+**FilterNode 结构**（三合一设计）：
+```cpp
+struct FilterNode {
+    FilterDef             def;       // 用户定义（pattern, color, enabled, exclude）
+    std::regex            compiled;  // 预编译 regex（避免重复编译）
+    std::vector<uint32_t> output;    // 通过本阶段的1-based原始行号
+};
+```
+
+**阶段缓存逻辑**：`filters_[k].output` 存放通过前 k+1 个过滤器的行号集合。修改第 k 个过滤器只需从第 k 阶段重新 buildStage，前 k-1 阶段缓存不受影响。
+
+**增量处理**（Push 路径）：
+- `processNewLines(first, last)` → `processNewLinesImpl()`：新行依次通过每个 `FilterNode`，append 到 `output` 末尾。
+- reprocess 期间收到新行 → 暂存 `pendingNewLines_`，reprocess 完成后由 `DoneCallback` 在 UI 线程一次性补处理。
+
+**cancelFlag_ 取消机制**：
+- 新 reprocess 开始时 `cancelFlag_.store(true)`，join 等待旧线程退出，然后 `cancelFlag_.store(false)` 再启动新线程。
+- `buildStage()` 每处理一定行数检查 `cancel.load()`，提前返回。
+
+**持久化**：
+- `save(path)` 和 `save(path, lastFile, mode)` 两个重载，共用 `buildFiltersJson()` 内部函数（返回 `nlohmann::json` array）。
+- `ensureParentDir()` 自动创建父目录（支持首次运行）。
+- `load(path)` 重建 `FilterNode`（重新编译 regex），然后触发全量 reprocess。
+
+### 3.4 AppController
+
+**职责**：双窗格状态管理、键盘事件分发（InputMode 状态机）、搜索、折叠、对话框、进度条。
+
+**状态机**：`InputMode` 枚举控制键盘分发路径：
+
+```
+None ──────────────────────────────────── 普通导航/过滤/模式键
+  ├─ '/' → Search ─── Enter/Esc → None
+  ├─ 'a'/'e' → FilterAdd/FilterEdit ── Enter/Esc → None
+  ├─ 'g' → GotoLine ─── Enter/Esc → None
+  ├─ 'o' → OpenFile ── Enter/Esc → None
+  ├─ 'w' → ExportConfirm ── Enter/Esc → None
+  └─ 'd' → (对话框) → handleKeyDialog → Yes/No → None
+```
+
+**PaneState**：
+```cpp
+struct PaneState { size_t cursor = 0; size_t scrollOffset = 0; };
+```
+每个窗格（Raw / Filtered）各一份，`clampScroll()` 在 `getViewData()` 时约束到合法范围。
+
+**getViewData() 职责**：
+1. 计算可见行切片（`[scrollOffset, scrollOffset + paneHeight)`）
+2. 构建 `LogLine` 列表（含 `rawLineNo`、`content string_view`、`colors`、`highlighted`、`folded`）
+3. 组装 `ViewData`（过滤标签、输入状态、对话框、进度）
+4. 不修改任何业务状态——scroll clamp 是唯一副作用（`mutable` 成员）
+
+**提取的私有方法**（重构后）：
+- `clampSelectedFilter()`：替换 4 处重复的 selectedFilter_ 边界检查
+- `stepSearch(int dir)`：统一 `n`/`p` 键的搜索跳转逻辑
+- `toggleFoldCurrentLine()`：从 `handleModeKeys()` 提取的 17 行 `z` 键逻辑
+- `kHelpText`（static constexpr string_view）：从 `h` 键 handler 内联提取
+
+### 3.5 渲染层
+
+**职责**：纯 FTXUI 渲染，将 `ViewData` 转换为 FTXUI `Element` 树，无业务状态。
+
+**组件层次**（`render.cpp`）：
+```
+CreateMainComponent(controller, screen)
+  └─ CatchEvent → handleKey()
+  └─ Renderer → getViewData() → BuildMainView(data)
+       ├─ RenderStatusBar(data)
+       ├─ RenderRawPane(data)          ← RenderLogLine 逐行
+       ├─ separator
+       ├─ RenderFilteredPane(data)     ← RenderLogLine 逐行
+       ├─ RenderFilterBar(data)
+       ├─ RenderInputLine(data)        （InputMode != None 时显示）
+       ├─ RenderDialogOverlay(data)    （showDialog 时覆盖）
+       └─ RenderProgressOverlay(data)  （showProgress 时覆盖）
+```
+
+**renderColoredLine() / render_utils.cpp**：
+- 接收 `string_view content` + `vector<ColorSpan>`，输出 FTXUI `Elements`
+- UTF-8 安全：按字节扫描，`0x80`~`0xBF` 是续字节跳过，多字节序列整体处理
+- ColorSpan 按字符（不是字节）位置计数，`computeColors()` 在 FilterChain 侧保证
+
+---
+
+## 4. 线程模型
+
+### 4.1 五条线程
+
+| 线程 | 职责 | 生命周期 |
+|------|------|----------|
+| **UI 主线程** | FTXUI 事件循环、渲染、所有业务方法 | 全程 |
+| **IndexThread** | 扫描文件换行符，填充 `lineOffsets_[]` | open() 启动，索引完成退出 |
+| **FileWatcher** | 轮询文件大小变化 | 实时模式开启时运行 |
+| **ReprocessThread** | 重建所有 FilterNode 的 output 缓存 | reprocess() 触发，完成退出 |
+| **SearchThread** | 全文扫描关键字，收集匹配行 | '/' 搜索触发，完成退出 |
+
+### 4.2 后台→UI 通信规则
+
+**所有**后台线程通过 `postFn_(lambda)` 将结果投递回 UI 线程，lambda 在下一个 FTXUI 事件循环帧执行。唯一例外：`lineCount_` 是 `atomic<size_t>`，允许 UI 线程直接读取（但 `lineOffsets_` 的实际数据仍由 `lineCount_` release/acquire 序列化保护）。
+
+```
+IndexThread          FileWatcher        ReprocessThread     SearchThread
+     │                   │                    │                   │
+     │ lineCount_.fetch_add(1, release)        │                   │
+     │ postFn_(onProgress/onDone)              │                   │
+     │                   │ postFn_(handleNewLines/handleFileReset)  │
+     │                   │                    │ postFn_(onProgress/onDone)
+     │                   │                    │                   │ postFn_(onSearchDone)
+     └───────────────────┴────────────────────┴───────────────────┘
+                                UI 线程（所有 lambda 在此执行）
+```
+
+### 4.3 关键竞争点及解决
+
+| 竞争点 | 解决方案 |
+|--------|----------|
+| `lineOffsets_` 读写 | `atomic<size_t> lineCount_` release/acquire 序列化 |
+| reprocess 期间收到新行 | `pendingNewLines_` 缓存，done 回调后补处理 |
+| 多次连续 reprocess | `cancelFlag_` + join 保证串行（旧线程先退出） |
+| mmap remap vs SearchThread | SearchThread 持有 `shared_ptr<MmapRegion>` 防 dangling |
+| forceCheck vs FileWatcher | `checkMutex_` 互斥 |
+
+---
+
+## 5. 关键设计决策
+
+### 5.1 mmap + append-only 行索引
+
+**选择原因**：
+- mmap 让 OS 负责缓存和分页，对大文件几乎零拷贝
+- `getLine()` 返回 `string_view`，指向 mmap 内存，避免字符串复制
+- 行索引只追加（`lineOffsets_[]`），新行到来时增量扩展，不需要锁
+
+**代价**：文件必须整体 mmap，极大文件（> 可用虚地址空间）理论上受限，但实践中 16EB 的 `uint64_t` 偏移足够。
+
+### 5.2 FilterNode 三合一
+
+将 `FilterDef`（用户定义）、`std::regex`（预编译）、`output`（阶段缓存）绑定为同一对象，避免三个独立 vector 之间的索引同步错误，也避免每次过滤都重新编译 regex。
+
+### 5.3 PostFn 机制
+
+后台线程持有 `PostFn`（`std::function<void(std::function<void()>)>`），测试中替换为同步版本（直接调用 lambda），使异步逻辑可以在单线程测试中确定性验证，无需 `sleep` 或复杂同步原语。
+
+### 5.4 getViewData() 纯快照
+
+`getViewData()` 的合约是"构建快照"而非"修改状态"。滚动 clamp（`mutable` 成员）是唯一例外，且只为保证渲染的合法性，不影响业务逻辑正确性。这使渲染层完全是纯函数式的：同样的 `ViewData` 必然渲染出同样的画面。
+
+### 5.5 接口隔离（ILogReader / IFilterChain）
+
+`AppController` 只依赖抽象接口，使单元测试可以注入 GMock 对象，精确控制返回值并验证调用序列，不依赖真实文件 I/O 或 regex 引擎。
+
+---
+
+## 6. 二次开发指南
+
+### 6.1 添加新快捷键
+
+1. 确认触发时机（`InputMode::None` 还是某个输入模式）
+2. 在对应的 `handleKeyXxx()` 方法中添加 `if (event == Event::Character('x')) { ... return true; }`
+3. 更新 `kHelpText`（`app_controller.cpp` 顶部 static constexpr）
+4. 添加 E2E 测试（`handleKey()` + `getViewData()` 断言）
+
+### 6.2 添加新过滤类型
+
+当前过滤器仅支持 `include`（保留匹配行）和 `exclude`（剔除匹配行）。若要添加新类型（例如"高亮但不过滤"）：
+
+1. 在 `FilterDef`（`i_filter_chain.hpp`）中扩展枚举或字段
+2. 在 `FilterChain::buildStage()` 中添加对应分支
+3. 在 `FilterChain::computeColors()` 中添加颜色规则
+4. 在 `render.cpp` 的过滤标签渲染处显示新类型标识
+5. 更新 `FilterChain::save()`/`load()` 的 JSON 序列化
+
+### 6.3 添加新 UI 区域
+
+以"书签栏"为例：
+
+1. 在 `ViewData` 中添加 `struct BookmarkItem` 和 `vector<BookmarkItem> bookmarks`
+2. 在 `AppController::getViewData()` 的 `buildRawPane()` 或新增 `buildBookmarkBar()` 中填充
+3. 在 `render.cpp` 中添加 `RenderBookmarkBar(data)` 并插入组件树
+4. 在 `AppController` 中添加 `unordered_set<size_t> bookmarkedLines_` 和快捷键处理
+
+### 6.4 添加新配置项
+
+1. 在 `AppConfig`（`include/app_config.hpp`）结构体中添加字段和默认值
+2. 在 `AppConfig::loadFromFile()`（`src/app_config.cpp`）中添加 `j.value("fieldName", currentValue)` 加载行
+3. 在使用处改用 `AppConfig::global().newField`
+4. 在 `docs/design.md` → 配置系统章节的字段表中追加记录
+5. 更新 `README.md` 的配置示例 JSON
+
+### 6.5 扩展 Session JSON
+
+`FilterChain::save()` 写出的 JSON 结构：
+
+```json
+{
+  "filters": [
+    { "pattern": "ERROR", "color": "red", "enabled": true, "exclude": false }
+  ],
+  "lastFile": "/path/to/log",
+  "mode": "realtime"
+}
+```
+
+添加新 session 字段：
+1. 在 `FilterChain::save(path, lastFile, mode)` 中添加 `j["newKey"] = value`
+2. 在 `FilterChain::load()` 中添加 `j.value("newKey", default)` 读取
+3. 如需由 `AppController` 存取，在 `sessionLastFile()` / `sessionMode()` 旁边添加 accessor
+
+---
+
+## 7. 已知限制与未来方向
+
+### 当前限制
+
+| 限制 | 说明 |
+|------|------|
+| 仅支持 UTF-8 | 其他编码（GBK、UTF-16）未经测试，行为未定义 |
+| 单文件查看 | 不支持多标签页或并排比较 |
+| 无跨行匹配 | 正则过滤逐行匹配，不支持跨行模式 |
+| 行数限制 | `uint32_t output` 限制单文件不超过约 42 亿行（实践中不构成限制） |
+| 行索引内存 | 每行 8 字节偏移，1 千万行约 80MB 索引内存 |
+
+### 未来方向
+
+- **双区联动**：过滤结果区选中行时，原始区自动跳转对应行
+- **命名捕获组高亮**：正则中 `(?P<level>ERROR|WARN)` 自动映射颜色
+- **懒求值过滤**：按需计算，适应超大文件
+- **多文件标签**：`AppController` 改为持有多个 `(LogReader, FilterChain)` 对
+
+---
+
+## 8. 测试策略速查
+
+| 层级 | 框架 | 隔离方式 | 典型断言 |
+|------|------|----------|----------|
+| 单元（unit/） | GTest | GMock 注入接口 | 方法调用次数、返回值 |
+| 渲染（render/） | GTest + FTXUI Screen | `RenderTestBase` 渲染到内存 buffer | buffer 中出现特定字符串 |
+| 端到端（e2e/） | GTest | 真实四层 + `TempFile` | `getViewData()` 字段精确匹配 |
+| 异步 | promise/future | `postFn` 替换为同步调用 | `waitReprocess()` 后断言 |
+
+运行全部测试：
+```bash
+/c/msys64/mingw64/bin/ninja.exe -C build && build/bin/ttLogViewer_tests.exe
+```

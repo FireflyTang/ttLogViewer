@@ -1,5 +1,6 @@
 # ── Core library (all layers except main) ─────────────────────────────────────
 add_library(ttLogViewer_lib STATIC
+    app_config.cpp
     log_reader.cpp
     filter_chain.cpp
     app_controller.cpp
