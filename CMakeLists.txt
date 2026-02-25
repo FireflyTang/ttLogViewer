@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ttLogViewer
-    VERSION 0.1.0
+    VERSION 0.9.1
     DESCRIPTION "A fast terminal log file viewer"
     LANGUAGES CXX
 )
@@ -47,12 +47,30 @@ FetchContent_Declare(json
 )
 FetchContent_MakeAvailable(json)
 
+# ── Version header (generated at configure time) ───────────────────────────────
+configure_file(cmake/version.hpp.in
+               ${CMAKE_BINARY_DIR}/include/version.hpp)
+
 # ── Platform-specific link libraries ──────────────────────────────────────────
 set(PLATFORM_LIBS "")
 if(WIN32)
     # MinGW/MSYS2: nothing extra needed for pthreads (built-in)
 elseif(UNIX AND NOT APPLE)
     list(APPEND PLATFORM_LIBS pthread)
+endif()
+
+# ── Static runtime option ──────────────────────────────────────────────────────
+# Pass -DSTATIC_RUNTIME=ON to link libgcc/libstdc++/winpthread statically,
+# producing a single-file executable without MinGW/GCC runtime DLL dependencies.
+option(STATIC_RUNTIME "Link C++/GCC runtimes statically" OFF)
+if(STATIC_RUNTIME)
+    if(MINGW)
+        set(STATIC_RUNTIME_FLAGS
+            -static-libgcc -static-libstdc++
+            -Wl,-Bstatic,-lpthread,-Bdynamic)
+    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set(STATIC_RUNTIME_FLAGS -static-libgcc -static-libstdc++)
+    endif()
 endif()
 
 # ── Sub-directories ───────────────────────────────────────────────────────────

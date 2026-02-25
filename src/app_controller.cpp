@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app_config.hpp"
+#include "version.hpp"
 
 using namespace ftxui;
 
@@ -321,7 +322,7 @@ bool AppController::handleModeKeys(const Event& event) {
     }
     if (event == Event::Character('h')) {
         showDialog_      = true;
-        dialogTitle_     = "快捷键帮助";
+        dialogTitle_     = std::string("ttLogViewer v") + TTLOGVIEWER_VERSION + "  帮助";
         dialogBody_      = std::string(kHelpText);
         dialogHasChoice_ = false;
         return true;

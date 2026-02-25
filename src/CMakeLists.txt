@@ -8,8 +8,9 @@ add_library(ttLogViewer_lib STATIC
     render.cpp
 )
 
-target_include_directories(ttLogViewer_lib PUBLIC
-    ${CMAKE_SOURCE_DIR}/include
+target_include_directories(ttLogViewer_lib
+    PUBLIC  ${CMAKE_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_BINARY_DIR}/include   # Generated version.hpp
 )
 
 target_link_libraries(ttLogViewer_lib PUBLIC
@@ -28,3 +29,7 @@ target_link_libraries(ttLogViewer PRIVATE ttLogViewer_lib)
 set_target_properties(ttLogViewer PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
 )
+
+if(STATIC_RUNTIME AND DEFINED STATIC_RUNTIME_FLAGS)
+    target_link_options(ttLogViewer PRIVATE ${STATIC_RUNTIME_FLAGS})
+endif()

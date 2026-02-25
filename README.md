@@ -109,4 +109,4 @@ cmake -B build -G Ninja \
 - 阶段二：过滤链 + 搜索 + 实时监控 ✓
 - 阶段三：辅助功能 + 会话持久化 + 配置系统 ✓
 
-详细设计文档见 [docs/design.md](docs/design.md)；实现报告见 [docs/implementation.md](docs/implementation.md)。
+详细设计文档见 [design.md](design.md)；实现报告见 [implementation.md](implementation.md)。

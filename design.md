@@ -1093,3 +1093,52 @@ AppConfig::loadGlobal("/path/to/cfg.json");  // 自定义路径
 AppConfig cfg;
 bool ok = cfg.loadFromFile("/path/to/cfg.json");
 ```
+
+---
+
+## 版本管理
+
+### 版本号单一来源
+
+版本号的唯一来源是根 `CMakeLists.txt` 的 `project()` 声明：
+
+```cmake
+project(ttLogViewer VERSION X.Y.Z LANGUAGES CXX)
+```
+
+CMake 在构建时通过 `configure_file(cmake/version.hpp.in ...)` 自动生成
+`${CMAKE_BINARY_DIR}/include/version.hpp`，包含以下宏：
+
+```cpp
+#define TTLOGVIEWER_VERSION       "X.Y.Z"
+#define TTLOGVIEWER_VERSION_MAJOR X
+#define TTLOGVIEWER_VERSION_MINOR Y
+#define TTLOGVIEWER_VERSION_PATCH Z
+```
+
+应用代码 `#include "version.hpp"` 即可使用，**不需要手动维护版本字符串**。
+
+### UI 版本显示
+
+按 `h` 键打开帮助对话框时，对话框标题格式为：
+
+```
+ttLogViewer vX.Y.Z  帮助
+```
+
+快捷键列表本身不含版本信息，版本仅显示在标题行。
+
+### 发版手动同步清单
+
+CMakeLists.txt 的 VERSION 字段变更后，以下位置需手动同步（详见 CLAUDE.md 发版流程）：
+
+| 位置 | 内容 |
+|------|------|
+| `README.md` | "开发状态"行的版本号和测试数量 |
+| `implementation.md` | 顶部版本号和最后更新日期 |
+| git tag | `git tag vX.Y.Z` |
+| GitHub Release | `gh release create vX.Y.Z ...` |
+
+以下位置**自动联动**，无需手动修改：
+- 编译进二进制的版本号（通过 version.hpp 宏）
+- 帮助对话框标题中的版本号
