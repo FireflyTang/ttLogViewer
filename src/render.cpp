@@ -36,19 +36,20 @@ static Color parseColor(std::string_view hex) {
 static Element renderColoredLine(std::string_view content,
                                   const std::vector<ColorSpan>& spans) {
     if (spans.empty())
-        return text(std::string(content));
+        return text(std::string(content));  // Note: text() requires std::string
 
     Elements parts;
     size_t pos = 0;
 
     for (const auto& span : spans) {
-        if (span.start > pos)
+        if (span.start > pos) {
+            // FTXUI's text() requires std::string, not string_view, so copy is unavoidable
             parts.push_back(text(std::string(content.substr(pos, span.start - pos))));
+        }
 
-        size_t len = (span.end > span.start) ? span.end - span.start : 0;
-        if (len > 0) {
+        if (span.end > span.start) {
             parts.push_back(
-                text(std::string(content.substr(span.start, len)))
+                text(std::string(content.substr(span.start, span.end - span.start)))
                 | color(parseColor(span.color))
             );
         }
@@ -64,12 +65,24 @@ static Element renderColoredLine(std::string_view content,
 // Format a number with thousands separators, e.g. 1234567 → "1,234,567".
 static std::string fmtCount(size_t n) {
     std::string s = std::to_string(n);
-    size_t insertPos = s.size();
-    while (insertPos > 3) {
-        insertPos -= 3;
-        s.insert(insertPos, ",");
+    if (s.size() <= 3) return s;
+
+    // Build result backwards to avoid repeated insertions
+    std::string result;
+    result.reserve(s.size() + s.size() / 3);
+
+    int count = 0;
+    for (auto it = s.rbegin(); it != s.rend(); ++it) {
+        if (count == 3) {
+            result.push_back(',');
+            count = 0;
+        }
+        result.push_back(*it);
+        ++count;
     }
-    return s;
+
+    std::reverse(result.begin(), result.end());
+    return result;
 }
 
 // ── Sub-component renderers ────────────────────────────────────────────────────
@@ -126,9 +139,11 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         return text(" (无过滤器) ") | dim;
 
     Elements items;
+    items.reserve(tags.size());
     for (const auto& tag : tags) {
-        std::string label = "[" + std::to_string(tag.number) + ":" + tag.pattern + "]";
-        Element e = text(" " + label + " ");
+        // Use std::format for efficient string formatting (C++20)
+        std::string label = std::format(" [{}:{}] ", tag.number, tag.pattern);
+        Element e = text(std::move(label));
         if (tag.selected)  e = e | inverted;
         if (!tag.enabled)  e = e | dim;
         items.push_back(e);

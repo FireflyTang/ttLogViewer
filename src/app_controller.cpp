@@ -163,21 +163,31 @@ bool AppController::handleNavKeys(const Event& event, int activePh) {
 
 bool AppController::handleFilterKeys(const Event& event) {
     if (event == Event::Character('a')) {
-        colorPaletteIdx_ = chain_.filterCount() % 8;
+        colorPaletteIdx_ = chain_.filterCount() % kDefaultColorPaletteSize;
         enterInputMode(InputMode::FilterAdd, "Pattern> ");
         return true;
     }
     if (event == Event::Character('e')) {
         if (chain_.filterCount() == 0) return true;
+        // Ensure selectedFilter_ is in valid range
+        if (selectedFilter_ >= chain_.filterCount()) {
+            selectedFilter_ = chain_.filterCount() > 0 ? chain_.filterCount() - 1 : 0;
+        }
         const FilterDef& def = chain_.filterAt(selectedFilter_);
         enterInputMode(InputMode::FilterEdit, "Edit> ", def.pattern);
         return true;
     }
     if (event == Event::Character('d')) {
         if (chain_.filterCount() == 0) return true;
+        // Validate selectedFilter_ before deletion
+        if (selectedFilter_ >= chain_.filterCount()) {
+            selectedFilter_ = chain_.filterCount() - 1;
+        }
         chain_.remove(selectedFilter_);
-        if (selectedFilter_ >= chain_.filterCount() && selectedFilter_ > 0)
-            --selectedFilter_;
+        // Adjust selection after deletion
+        if (selectedFilter_ >= chain_.filterCount() && chain_.filterCount() > 0) {
+            selectedFilter_ = chain_.filterCount() - 1;
+        }
         triggerReprocess(0);
         return true;
     }
@@ -209,6 +219,10 @@ bool AppController::handleFilterKeys(const Event& event) {
     }
     if (event == Event::Character(' ')) {
         if (chain_.filterCount() > 0) {
+            // Validate selectedFilter_ before access
+            if (selectedFilter_ >= chain_.filterCount()) {
+                selectedFilter_ = chain_.filterCount() - 1;
+            }
             FilterDef def = chain_.filterAt(selectedFilter_);
             def.enabled   = !def.enabled;
             chain_.edit(selectedFilter_, std::move(def));
@@ -225,17 +239,27 @@ bool AppController::handleSearchKeys(const Event& event) {
         return true;
     }
     if (event == Event::Character('n')) {
-        if (!searchResults_.empty()) {
-            searchIndex_ = (searchIndex_ + 1) % searchResults_.size();
+        const size_t resultCount = searchResults_.size();
+        if (resultCount > 0) {
+            // Ensure searchIndex_ is valid before incrementing
+            if (searchIndex_ >= resultCount) {
+                searchIndex_ = 0;
+            } else {
+                searchIndex_ = (searchIndex_ + 1) % resultCount;
+            }
             jumpToSearchResult(searchIndex_);
         }
         return true;
     }
     if (event == Event::Character('p')) {
-        if (!searchResults_.empty()) {
-            searchIndex_ = (searchIndex_ == 0)
-                ? searchResults_.size() - 1
-                : searchIndex_ - 1;
+        const size_t resultCount = searchResults_.size();
+        if (resultCount > 0) {
+            // Ensure searchIndex_ is valid before decrementing
+            if (searchIndex_ >= resultCount) {
+                searchIndex_ = resultCount - 1;
+            } else {
+                searchIndex_ = (searchIndex_ == 0) ? resultCount - 1 : searchIndex_ - 1;
+            }
             jumpToSearchResult(searchIndex_);
         }
         return true;
@@ -296,11 +320,7 @@ bool AppController::handleKeyNone(const Event& event) {
 // ── Filter input mode ─────────────────────────────────────────────────────────
 
 bool AppController::handleKeyFilterInput(const Event& event) {
-    if (event == Event::Escape) {
-        exitInputMode();
-        return true;
-    }
-
+    // Special handling for Return key
     if (event == Event::Return) {
         if (!inputValid_) {
             showErrorDialog("无效正则", "正则表达式编译失败:\n" + inputBuffer_);
@@ -314,10 +334,13 @@ bool AppController::handleKeyFilterInput(const Event& event) {
             selectedFilter_ = chain_.filterCount() - 1;
             triggerReprocess(selectedFilter_);
         } else {  // FilterEdit
-            FilterDef def = chain_.filterAt(selectedFilter_);
-            def.pattern = inputBuffer_;
-            chain_.edit(selectedFilter_, std::move(def));
-            triggerReprocess(selectedFilter_);
+            // Validate selectedFilter_ before access (defensive)
+            if (selectedFilter_ < chain_.filterCount()) {
+                FilterDef def = chain_.filterAt(selectedFilter_);
+                def.pattern = inputBuffer_;
+                chain_.edit(selectedFilter_, std::move(def));
+                triggerReprocess(selectedFilter_);
+            }
         }
         exitInputMode();
         return true;
@@ -325,31 +348,18 @@ bool AppController::handleKeyFilterInput(const Event& event) {
 
     // Tab: cycle color palette (FilterAdd only)
     if (event == Event::Tab && inputMode_ == InputMode::FilterAdd) {
-        colorPaletteIdx_ = (colorPaletteIdx_ + 1) % 8;
+        colorPaletteIdx_ = (colorPaletteIdx_ + 1) % kDefaultColorPaletteSize;
         return true;
     }
 
-    if (event == Event::Backspace) {
-        if (!inputBuffer_.empty()) {
-            inputBuffer_.pop_back();
-            validateInputRegex();
-        }
-        return true;
-    }
-
-    // Append printable character
-    if (event.is_character()) {
-        inputBuffer_ += event.character();
-        validateInputRegex();
-        return true;
-    }
-
-    return false;
+    // Handle common input keys (Escape, Backspace, characters)
+    return handleCommonInputKeys(event, true);
 }
 
 // ── Search mode ───────────────────────────────────────────────────────────────
 
 bool AppController::handleKeySearch(const Event& event) {
+    // Special handling for Escape - also clear search results
     if (event == Event::Escape) {
         searchResults_.clear();
         searchIndex_ = 0;
@@ -357,33 +367,21 @@ bool AppController::handleKeySearch(const Event& event) {
         return true;
     }
 
+    // Special handling for Return key
     if (event == Event::Return) {
         runSearch(inputBuffer_);
         exitInputMode();
         return true;
     }
 
-    if (event == Event::Backspace) {
-        if (!inputBuffer_.empty()) inputBuffer_.pop_back();
-        return true;
-    }
-
-    if (event.is_character()) {
-        inputBuffer_ += event.character();
-        return true;
-    }
-
-    return false;
+    // Handle common input keys (Backspace, characters)
+    return handleCommonInputKeys(event, true);
 }
 
 // ── GotoLine mode ─────────────────────────────────────────────────────────────
 
 bool AppController::handleKeyGotoLine(const Event& event) {
-    if (event == Event::Escape) {
-        exitInputMode();
-        return true;
-    }
-
+    // Special handling for Return key
     if (event == Event::Return) {
         try {
             size_t lineNo = std::stoul(inputBuffer_);
@@ -391,34 +389,32 @@ bool AppController::handleKeyGotoLine(const Event& event) {
             const size_t total = reader_.lineCount();
             if (lineNo > total) lineNo = total;
             jumpToRawLine(lineNo);
-        } catch (...) {}
+        } catch (const std::invalid_argument&) {
+            // Invalid number format - do nothing, just exit
+        } catch (const std::out_of_range&) {
+            // Number too large - do nothing, just exit
+        }
         exitInputMode();
+        // Note: We don't show error dialog as the input is already restricted to digits
+        // This catch is only for edge cases like extremely large numbers
         return true;
     }
 
-    if (event == Event::Backspace) {
-        if (!inputBuffer_.empty()) inputBuffer_.pop_back();
-        return true;
-    }
-
-    // Only digits
+    // Only accept digits for GotoLine mode
     if (event.is_character() && event.character().size() == 1
         && event.character()[0] >= '0' && event.character()[0] <= '9') {
         inputBuffer_ += event.character();
         return true;
     }
 
-    return false;
+    // Handle common keys (Escape, Backspace) but don't accept all characters
+    return handleCommonInputKeys(event, false);
 }
 
 // ── OpenFile mode ─────────────────────────────────────────────────────────────
 
 bool AppController::handleKeyOpenFile(const Event& event) {
-    if (event == Event::Escape) {
-        exitInputMode();
-        return true;
-    }
-
+    // Special handling for Return key
     if (event == Event::Return) {
         std::string path = inputBuffer_;
         exitInputMode();
@@ -437,17 +433,8 @@ bool AppController::handleKeyOpenFile(const Event& event) {
         return true;
     }
 
-    if (event == Event::Backspace) {
-        if (!inputBuffer_.empty()) inputBuffer_.pop_back();
-        return true;
-    }
-
-    if (event.is_character()) {
-        inputBuffer_ += event.character();
-        return true;
-    }
-
-    return false;
+    // Handle common input keys (Escape, Backspace, characters)
+    return handleCommonInputKeys(event, true);
 }
 
 // ── Dialog mode ───────────────────────────────────────────────────────────────
@@ -523,8 +510,9 @@ void AppController::buildRawPane(ViewData& data) {
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
     // Pre-compute the highlighted search line (0 = none)
-    const size_t searchLine = (!searchResults_.empty()
-                               && searchIndex_ < searchResults_.size())
+    // Cache size to avoid potential race conditions
+    const size_t resultCount = searchResults_.size();
+    const size_t searchLine = (resultCount > 0 && searchIndex_ < resultCount)
                               ? searchResults_[searchIndex_] : 0;
 
     data.rawPane.reserve(count);
@@ -654,6 +642,45 @@ void AppController::validateInputRegex() {
     }
 }
 
+// ── Common input helpers ──────────────────────────────────────────────────────
+
+bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacters) {
+    // Handle Escape key - exit input mode
+    if (event == Event::Escape) {
+        exitInputMode();
+        return true;
+    }
+
+    // Handle Backspace key
+    if (event == Event::Backspace) {
+        return handleInputBackspace();
+    }
+
+    // Handle character input if allowed
+    if (allowCharacters && event.is_character()) {
+        inputBuffer_ += event.character();
+        // Validate regex if in filter input mode
+        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit) {
+            validateInputRegex();
+        }
+        return true;
+    }
+
+    return false;
+}
+
+bool AppController::handleInputBackspace() {
+    if (!inputBuffer_.empty()) {
+        inputBuffer_.pop_back();
+        // Validate regex if in filter input mode
+        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit) {
+            validateInputRegex();
+        }
+        return true;
+    }
+    return false;
+}
+
 // ── Filter helpers ────────────────────────────────────────────────────────────
 
 const char* AppController::nextPaletteColor(size_t idx) {
@@ -703,6 +730,10 @@ void AppController::runSearch(const std::string& keyword) {
     if (keyword.empty()) return;
 
     const size_t total = reader_.lineCount();
+    // Reserve space to avoid frequent reallocations during search
+    // Estimate: most searches match <10% of lines, but reserve conservatively
+    searchResults_.reserve(std::min(total / 10, size_t(10000)));
+
     for (size_t i = 1; i <= total; ++i) {
         std::string_view line = reader_.getLine(i);
         // Simple substring search (case-sensitive)

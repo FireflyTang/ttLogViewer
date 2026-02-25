@@ -16,8 +16,11 @@ using PostFn = std::function<void(std::function<void()>)>;
 using NewLinesCallback  = std::function<void(size_t firstLine, size_t lastLine)>;
 using FileResetCallback = std::function<void()>;
 
-// Abstract interface for log file reading.
-// All methods must be called from the UI thread unless otherwise noted.
+// Abstract interface for log file reading with memory-mapped file support.
+// Thread safety: All methods (except getLine/getLines) must be called from
+// the UI thread only. getLine/getLines can be called from any thread if the
+// caller holds a shared_ptr from mmapAnchor() to prevent the memory map from
+// being deallocated during access.
 class ILogReader {
 public:
     virtual ~ILogReader() = default;
@@ -25,8 +28,14 @@ public:
     virtual bool open(std::string_view path) = 0;
     virtual void close() = 0;
 
-    // 1-based line access. Returned view is valid until the next remap.
+    // Returns the content of the line at the given 1-based line number.
+    // Line numbers start from 1; lineNo=0 or lineNo > lineCount() returns empty view.
+    // The returned string_view is valid until the next file remap (file growth/change).
+    // Thread safety: Safe to call from any thread if caller holds mmapAnchor().
     virtual std::string_view              getLine(size_t lineNo)           const = 0;
+
+    // Returns multiple lines in range [from, to] inclusive (1-based).
+    // Same lifetime and thread safety guarantees as getLine().
     virtual std::vector<std::string_view> getLines(size_t from, size_t to) const = 0;
 
     virtual size_t   lineCount()  const = 0;

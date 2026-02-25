@@ -162,7 +162,10 @@ private:
     bool   showProgress_ = false;
     double progress_     = 0.0;
 
-    // Stored last-known pane heights
+    // Cached pane heights for rendering. Marked mutable because getViewData()
+    // updates these values even though it's logically a query operation.
+    // This allows the renderer to get consistent pane heights without calling
+    // Terminal::Size() on every frame. Thread safety: single-threaded UI only.
     mutable int lastRawPaneHeight_      = 20;
     mutable int lastFilteredPaneHeight_ = 20;
 
@@ -193,6 +196,10 @@ private:
     void enterInputMode(InputMode mode, std::string prompt, std::string prefill = "");
     void exitInputMode();
     void validateInputRegex();
+
+    // Common input handling patterns
+    bool handleCommonInputKeys(const ftxui::Event& event, bool allowCharacters = true);
+    bool handleInputBackspace();
 
     // ── Filter helpers ────────────────────────────────────────────────────────
     static const char* nextPaletteColor(size_t idx);

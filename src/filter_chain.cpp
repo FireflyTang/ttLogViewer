@@ -390,7 +390,14 @@ bool FilterChain::load(std::string_view path) {
 
         filters_ = std::move(newFilters);
         return true;
-    } catch (...) {
+    } catch (const std::regex_error&) {
+        // Invalid regex pattern in saved filters
+        return false;
+    } catch (const nlohmann::json::exception&) {
+        // JSON parsing error
+        return false;
+    } catch (const std::exception&) {
+        // Other standard exceptions (file I/O, etc.)
         return false;
     }
 }

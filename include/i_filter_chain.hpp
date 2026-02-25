@@ -24,14 +24,21 @@ struct ColorSpan {
 using ProgressCallback = std::function<void(double)>;   // 0.0 ~ 1.0
 using DoneCallback     = std::function<void()>;
 
+// Size of the default color palette.
+constexpr size_t kDefaultColorPaletteSize = 8;
+
 // Returns the default "#RRGGBB" color string for a filter at the given index.
-// Cycles through an 8-color palette.  Defined in filter_chain.cpp.
+// Cycles through a palette of kDefaultColorPaletteSize colors.
+// Defined in filter_chain.cpp.
 const char* defaultColor(size_t filterIndex);
 
 // ── Abstract interface ─────────────────────────────────────────────────────────
 
 // Abstract interface for the filter chain.
-// All methods must be called from the UI thread unless otherwise noted.
+// Thread safety: All public methods must be called from the UI thread only.
+// NOT thread-safe for concurrent calls from multiple threads.
+// The implementation uses background threads internally but synchronizes
+// results back to the UI thread via PostFn callbacks.
 class IFilterChain {
 public:
     virtual ~IFilterChain() = default;
