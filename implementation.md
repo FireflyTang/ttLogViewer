@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.1（三阶段实现完成 + 版本管理 + 静态打包）
-> 测试：226 个，全部通过
+> 版本：v0.9.2（搜索增强 + 过滤器字符串/正则模式切换）
+> 测试：247 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -149,13 +149,19 @@ open(path)
 **FilterNode 结构**（三合一设计）：
 ```cpp
 struct FilterNode {
-    FilterDef             def;       // 用户定义（pattern, color, enabled, exclude）
-    std::regex            compiled;  // 预编译 regex（避免重复编译）
+    FilterDef             def;       // 用户定义（pattern, color, enabled, exclude, useRegex）
+    std::regex            compiled;  // 预编译 regex（仅 useRegex=true 时有效）
     std::vector<uint32_t> output;    // 通过本阶段的1-based原始行号
 };
 ```
 
 **阶段缓存逻辑**：`filters_[k].output` 存放通过前 k+1 个过滤器的行号集合。修改第 k 个过滤器只需从第 k 阶段重新 buildStage，前 k-1 阶段缓存不受影响。
+
+**字符串/正则双模式**（v0.9.2 新增）：
+- `FilterDef.useRegex = false`（默认）：字面字符串匹配（`string_view::find()`），无 regex 编译，特殊字符按字面处理
+- `FilterDef.useRegex = true`：`std::regex` 匹配，`compiled` 字段有效
+- `x` 键调用 `toggleUseRegex(idx)`：翻转模式，切换到 regex 时尝试编译——失败则回退为字符串模式
+- `filteredLineCountAt(idx)` 返回 `filters_[idx].output.size()`，供 filter bar 显示每个过滤器的匹配行数
 
 **增量处理**（Push 路径）：
 - `processNewLines(first, last)` → `processNewLinesImpl()`：新行依次通过每个 `FilterNode`，append 到 `output` 末尾。
@@ -194,8 +200,8 @@ struct PaneState { size_t cursor = 0; size_t scrollOffset = 0; };
 
 **getViewData() 职责**：
 1. 计算可见行切片（`[scrollOffset, scrollOffset + paneHeight)`）
-2. 构建 `LogLine` 列表（含 `rawLineNo`、`content string_view`、`colors`、`highlighted`、`folded`）
-3. 组装 `ViewData`（过滤标签、输入状态、对话框、进度）
+2. 构建 `LogLine` 列表（含 `rawLineNo`、`content string_view`、`colors`、`searchSpans`、`highlighted`、`folded`）
+3. 组装 `ViewData`（过滤标签含 `useRegex`/`matchCount`、输入状态、对话框、进度）
 4. 不修改任何业务状态——scroll clamp 是唯一副作用（`mutable` 成员）
 
 **提取的私有方法**（重构后）：
@@ -203,6 +209,16 @@ struct PaneState { size_t cursor = 0; size_t scrollOffset = 0; };
 - `stepSearch(int dir)`：统一 `n`/`p` 键的搜索跳转逻辑
 - `toggleFoldCurrentLine()`：从 `handleModeKeys()` 提取的 17 行 `z` 键逻辑
 - `kHelpText`（static constexpr string_view）：从 `h` 键 handler 内联提取
+- `computeSearchSpans()`（v0.9.2 新增）：静态辅助函数，扫描行内 keyword 所有出现位置，返回 `vector<SearchSpan>`
+
+**v0.9.2 新增私有字段**：
+- `searchKeyword_`（`std::string`）：最后提交的搜索词，供 `buildRawPane`/`buildFilteredPane` 计算 searchSpans
+- `searchInFiltered_`（`bool`）：记录搜索是在原始区（false）还是过滤区（true）发起
+
+**焦点感知搜索**（v0.9.2）：
+- 焦点在原始区时：`runSearch()` 扫描全量原始行（原有行为）
+- 焦点在过滤区时：只扫描 `chain_.filteredLineAt(i)` 返回的行集合
+- `jumpToSearchResult()` 同样感知：`searchInFiltered_=true` 时线性扫描过滤列表定位 cursor
 
 ### 3.5 渲染层
 
@@ -224,9 +240,10 @@ CreateMainComponent(controller, screen)
 ```
 
 **renderColoredLine() / render_utils.cpp**：
-- 接收 `string_view content` + `vector<ColorSpan>`，输出 FTXUI `Elements`
+- 接收 `string_view content` + `vector<ColorSpan>` + `vector<SearchSpan>`，输出 FTXUI `Elements`
 - UTF-8 安全：按字节扫描，`0x80`~`0xBF` 是续字节跳过，多字节序列整体处理
 - ColorSpan 按字符（不是字节）位置计数，`computeColors()` 在 FilterChain 侧保证
+- SearchSpan（v0.9.2 新增）：`{size_t start; size_t end;}` 字节区间，渲染为 **bold + underlined**，与过滤颜色叠加，两类 span 通过边界点合并算法同时处理
 
 ---
 
@@ -342,7 +359,7 @@ IndexThread          FileWatcher        ReprocessThread     SearchThread
 ```json
 {
   "filters": [
-    { "pattern": "ERROR", "color": "red", "enabled": true, "exclude": false }
+    { "pattern": "ERROR", "color": "red", "enabled": true, "exclude": false, "useRegex": false }
   ],
   "lastFile": "/path/to/log",
   "mode": "realtime"

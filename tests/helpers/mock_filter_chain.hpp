@@ -13,6 +13,9 @@ public:
     MOCK_METHOD(size_t,           filterCount, (),            (const, override));
     MOCK_METHOD(const FilterDef&, filterAt,    (size_t index),(const, override));
 
+    MOCK_METHOD(void,   toggleUseRegex,      (size_t idx),           (override));
+    MOCK_METHOD(size_t, filteredLineCountAt, (size_t idx),           (const, override));
+
     MOCK_METHOD(size_t,              filteredLineCount, (),                         (const, override));
     MOCK_METHOD(size_t,              filteredLineAt,    (size_t filteredIndex),      (const, override));
     MOCK_METHOD(std::vector<size_t>, filteredLines,     (size_t from, size_t count),(const, override));

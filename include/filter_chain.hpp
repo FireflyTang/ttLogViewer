@@ -46,6 +46,9 @@ public:
     size_t           filterCount()            const override;
     const FilterDef& filterAt(size_t index)   const override;
 
+    void   toggleUseRegex(size_t idx)           override;
+    size_t filteredLineCountAt(size_t idx) const override;
+
     // ── Query ────────────────────────────────────────────────────────────────
     size_t              filteredLineCount()                          const override;
     size_t              filteredLineAt(size_t filteredIndex)         const override;

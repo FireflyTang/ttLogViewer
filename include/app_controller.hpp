@@ -11,6 +11,7 @@
 
 #include "i_filter_chain.hpp"
 #include "i_log_reader.hpp"
+#include "render_utils.hpp"
 
 // ── Enumerations ───────────────────────────────────────────────────────────────
 
@@ -36,11 +37,12 @@ struct PaneState {
 };
 
 struct LogLine {
-    size_t                 rawLineNo   = 0;
-    std::string_view       content;
-    std::vector<ColorSpan> colors;
-    bool                   highlighted = false;
-    bool                   folded      = false;  // Phase 3
+    size_t                  rawLineNo   = 0;
+    std::string_view        content;
+    std::vector<ColorSpan>  colors;
+    std::vector<SearchSpan> searchSpans;   // bold+underlined search matches
+    bool                    highlighted = false;
+    bool                    folded      = false;  // Phase 3
 };
 
 struct ViewData {
@@ -67,6 +69,8 @@ struct ViewData {
         bool        enabled;
         bool        exclude;
         bool        selected;
+        bool        useRegex   = false;
+        size_t      matchCount = 0;
     };
     std::vector<FilterTag> filterTags;
 
@@ -145,8 +149,10 @@ private:
     size_t colorPaletteIdx_ = 0;    // Cycles through palette on Tab in FilterAdd
 
     // ── Search state ──────────────────────────────────────────────────────────
-    std::vector<size_t> searchResults_;   // 1-based raw line numbers
-    size_t              searchIndex_ = 0;
+    std::vector<size_t> searchResults_;       // 1-based raw line numbers
+    size_t              searchIndex_      = 0;
+    std::string         searchKeyword_;        // Last committed keyword (for spans)
+    bool                searchInFiltered_ = false;  // Search was in filtered pane
 
     // ── Real-time / tail-follow ───────────────────────────────────────────────
     bool   followTail_   = false;

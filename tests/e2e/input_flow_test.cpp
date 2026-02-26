@@ -71,13 +71,26 @@ TEST_F(InputFlowTest, AddFilterBackspace) {
     EXPECT_EQ(data().inputBuffer, "A");
 }
 
-TEST_F(InputFlowTest, AddFilterInvalidRegexSignalLight) {
+TEST_F(InputFlowTest, AddFilterStringModeAnyPatternValid) {
+    // FilterAdd starts in string mode (useRegex=false).
+    // Any non-empty pattern is valid — signal light is always green.
     key(ftxui::Event::Character('a'));
-    type("[");  // Incomplete bracket expression
+    type("[");  // Would be invalid regex, but string mode accepts it
+    EXPECT_TRUE(data().inputValid);
+}
+
+TEST_F(InputFlowTest, EditFilterRegexModeInvalidPatternInvalid) {
+    // Add a filter, toggle to regex mode via 'x', then edit with an invalid regex.
+    // In regex mode, invalid patterns should make inputValid=false.
+    key(ftxui::Event::Character('a'));
+    type("ERROR");
+    key(ftxui::Event::Return);
+    key(ftxui::Event::Character('x'));  // Toggle to regex mode
+    key(ftxui::Event::Character('e'));  // Enter edit mode
+    // Clear "ERROR" and type an invalid regex
+    for (int i = 0; i < 5; ++i) key(ftxui::Event::Backspace);
+    type("[invalid");
     EXPECT_FALSE(data().inputValid);
-    type("]");  // Now complete: "[]" is valid in some contexts
-    // Actually "[]]" or "[a-z]" are valid; "[]" may or may not be valid
-    // Just verify signal light updates
 }
 
 // ── 'e' edit flow ─────────────────────────────────────────────────────────────

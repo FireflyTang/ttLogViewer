@@ -76,12 +76,24 @@ TEST_F(FilterWorkflowTest, EscCancelsFilterAdd) {
 }
 
 TEST_F(FilterWorkflowTest, InvalidRegexNotAdded) {
+    // New filters start in string mode (useRegex=false).
+    // After adding as string, toggle to regex mode; the pattern "[invalid" fails
+    // regex compile and the toggle reverts (useRegex stays false).
+    addFilter("[invalid");  // Accepted as literal string
+    EXPECT_EQ(chain_.filterCount(), 1u);
+    // Toggle to regex mode — should revert because "[invalid" is not a valid regex
+    key(ftxui::Event::Character('x'));
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+}
+
+TEST_F(FilterWorkflowTest, StringModeAcceptsRegexSpecialChars) {
+    // In string mode, regex-special chars like "[" are valid literal patterns
     key(ftxui::Event::Character('a'));
-    type("[invalid");
+    type("[literal");
     key(ftxui::Event::Return);
-    // Shows dialog, filter NOT added
-    EXPECT_TRUE(data().showDialog);
-    EXPECT_EQ(chain_.filterCount(), 0u);
+    // No dialog shown; filter is accepted
+    EXPECT_FALSE(data().showDialog);
+    EXPECT_EQ(chain_.filterCount(), 1u);
 }
 
 // ── Filter selection with [ and ] ─────────────────────────────────────────────
@@ -160,4 +172,42 @@ TEST_F(FilterWorkflowTest, EditEscKeepsOriginal) {
     key(ftxui::Event::Escape);
     // Pattern unchanged (edit was cancelled)
     EXPECT_EQ(chain_.filterAt(0).pattern, "ERROR");
+}
+
+// ── x key: toggle regex/string mode ──────────────────────────────────────────
+
+TEST_F(FilterWorkflowTest, XKeyTogglesUseRegex) {
+    addFilter("ERROR");
+    bool before = data().filterTags[0].useRegex;
+    key(ftxui::Event::Character('x'));
+    bool after = data().filterTags[0].useRegex;
+    EXPECT_NE(before, after);
+}
+
+TEST_F(FilterWorkflowTest, XKeyRevertsBadRegex) {
+    // "[bad" can't be a regex; toggleUseRegex should revert
+    addFilter("[bad");
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+    key(ftxui::Event::Character('x'));
+    // Still false because "[bad" is not a valid regex
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+}
+
+// ── matchCount in FilterTag ───────────────────────────────────────────────────
+
+TEST_F(FilterWorkflowTest, MatchCountInFilterTag) {
+    addFilter("ERROR");
+    // ERROR appears on line2 and line5 in the test file
+    auto d = data();
+    ASSERT_EQ(d.filterTags.size(), 1u);
+    EXPECT_EQ(d.filterTags[0].matchCount, 2u);
+}
+
+TEST_F(FilterWorkflowTest, FilterBarLabelIncludesMatchCount) {
+    addFilter("ERROR");
+    // Filter bar shows "[1:ERROR](2)" in string mode
+    auto d = data();
+    ASSERT_EQ(d.filterTags.size(), 1u);
+    EXPECT_EQ(d.filterTags[0].matchCount, 2u);
+    EXPECT_FALSE(d.filterTags[0].useRegex);
 }

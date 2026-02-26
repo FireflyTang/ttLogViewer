@@ -118,7 +118,7 @@ TEST(RenderColoredLine, MultipleSpans) {
 
 TEST(RenderColoredLine, FoldedShowsEllipsis) {
     std::string long_line(40, 'x');
-    auto e = renderColoredLine(long_line, {}, /*folded=*/true, /*terminalWidth=*/20);
+    auto e = renderColoredLine(long_line, {}, {}, /*folded=*/true, /*terminalWidth=*/20);
     std::string s = renderLine(e, 30);
     // Should contain the ellipsis marker
     EXPECT_NE(s.find("…"), std::string::npos);
@@ -129,7 +129,7 @@ TEST(RenderColoredLine, FoldedShowsEllipsis) {
 TEST(RenderColoredLine, FoldedZeroWidthNoTruncation) {
     // terminalWidth <= 2 means no truncation
     std::string line = "hello world";
-    auto e = renderColoredLine(line, {}, /*folded=*/true, /*terminalWidth=*/0);
+    auto e = renderColoredLine(line, {}, {}, /*folded=*/true, /*terminalWidth=*/0);
     std::string s = renderLine(e, 20);
     EXPECT_NE(s.find("hello world"), std::string::npos);
 }
@@ -139,5 +139,32 @@ TEST(RenderColoredLine, CJKContentVisible) {
     std::string chinese = "\xe4\xbd\xa0\xe5\xa5\xbd\xe4\xb8\x96\xe7\x95\x8c";
     auto e = renderColoredLine(chinese, {});
     // Should not crash; content should appear in some form
+    EXPECT_NO_THROW(renderLine(e, 30));
+}
+
+// ── SearchSpan rendering ──────────────────────────────────────────────────────
+
+TEST(RenderColoredLine, SearchSpanBoldUnderlineNoCrash) {
+    std::vector<SearchSpan> ss = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", {}, ss);
+    std::string s = renderLine(e, 20);
+    // Both parts should appear in the output
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, SearchSpanAndColorSpanCoexist) {
+    std::vector<ColorSpan>  cs = {{ 0, 5, "#FF5555" }};
+    std::vector<SearchSpan> ss = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", cs, ss);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, MultipleSearchSpansAllVisible) {
+    // "apple pie apple": two "apple" matches at [0,5) and [10,15)
+    std::vector<SearchSpan> ss = {{ 0, 5 }, { 10, 15 }};
+    auto e = renderColoredLine("apple pie apple", {}, ss);
     EXPECT_NO_THROW(renderLine(e, 30));
 }

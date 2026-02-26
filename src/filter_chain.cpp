@@ -55,8 +55,9 @@ bool FilterChain::append(FilterDef def) {
         if (def.color.empty())
             def.color = defaultColor(filters_.size());
         FilterNode node;
-        node.def      = std::move(def);
-        node.compiled = std::regex(node.def.pattern);
+        node.def = std::move(def);
+        if (node.def.useRegex)
+            node.compiled = std::regex(node.def.pattern, std::regex::optimize);
         filters_.push_back(std::move(node));
         return true;
     } catch (const std::regex_error&) {
@@ -73,9 +74,10 @@ bool FilterChain::edit(size_t index, FilterDef def) {
     if (index >= filters_.size()) return false;
     try {
         FilterNode node;
-        node.def      = std::move(def);
-        node.compiled = std::regex(node.def.pattern);
-        node.output   = {};  // Invalidated; reprocess needed
+        node.def = std::move(def);
+        if (node.def.useRegex)
+            node.compiled = std::regex(node.def.pattern, std::regex::optimize);
+        node.output = {};  // Invalidated; reprocess needed
         filters_[index] = std::move(node);
         return true;
     } catch (const std::regex_error&) {
@@ -97,6 +99,28 @@ size_t FilterChain::filterCount() const { return filters_.size(); }
 
 const FilterDef& FilterChain::filterAt(size_t index) const {
     return filters_.at(index).def;
+}
+
+void FilterChain::toggleUseRegex(size_t idx) {
+    if (idx >= filters_.size()) return;
+    auto& node = filters_[idx];
+    node.def.useRegex = !node.def.useRegex;
+    if (node.def.useRegex) {
+        try {
+            node.compiled = std::regex(node.def.pattern, std::regex::optimize);
+        } catch (const std::regex_error&) {
+            node.def.useRegex = false;  // Revert if pattern is invalid regex
+            return;
+        }
+    }
+    // Clear cache and trigger reprocess from this filter onward
+    for (size_t i = idx; i < filters_.size(); ++i)
+        filters_[i].output.clear();
+}
+
+size_t FilterChain::filteredLineCountAt(size_t idx) const {
+    if (idx >= filters_.size()) return 0;
+    return filters_[idx].output.size();
 }
 
 // ── Query ──────────────────────────────────────────────────────────────────────
@@ -145,18 +169,33 @@ std::vector<ColorSpan> FilterChain::computeColors(size_t /*rawLineNo*/,
     for (const auto& node : filters_) {
         if (!node.def.enabled || node.def.exclude) continue;
 
-        const auto& pat = node.compiled;
-        auto it = std::cregex_iterator(content.data(),
-                                       content.data() + content.size(), pat);
-        auto end = std::cregex_iterator{};
-        for (; it != end; ++it) {
-            const auto& m = *it;
-            if (m.length() == 0) continue;
-            ColorSpan span;
-            span.start = static_cast<size_t>(m.position());
-            span.end   = span.start + static_cast<size_t>(m.length());
-            span.color = node.def.color;
-            spans.push_back(span);
+        if (node.def.useRegex) {
+            const auto& pat = node.compiled;
+            auto it = std::cregex_iterator(content.data(),
+                                           content.data() + content.size(), pat);
+            auto end = std::cregex_iterator{};
+            for (; it != end; ++it) {
+                const auto& m = *it;
+                if (m.length() == 0) continue;
+                ColorSpan span;
+                span.start = static_cast<size_t>(m.position());
+                span.end   = span.start + static_cast<size_t>(m.length());
+                span.color = node.def.color;
+                spans.push_back(span);
+            }
+        } else {
+            // Literal string: find all occurrences
+            const std::string& kw = node.def.pattern;
+            if (kw.empty()) continue;
+            size_t pos = 0;
+            while ((pos = content.find(kw, pos)) != std::string_view::npos) {
+                ColorSpan span;
+                span.start = pos;
+                span.end   = pos + kw.size();
+                span.color = node.def.color;
+                spans.push_back(span);
+                pos += kw.size();
+            }
         }
     }
 
@@ -208,8 +247,12 @@ void FilterChain::buildStage(std::vector<FilterNode>& nodes, size_t stage,
         if (idx >= lineViews.size()) continue;
 
         std::string_view line = lineViews[idx];
-        bool matched = std::regex_search(line.data(), line.data() + line.size(),
-                                          node.compiled);
+        bool matched;
+        if (node.def.useRegex)
+            matched = std::regex_search(line.data(), line.data() + line.size(),
+                                        node.compiled);
+        else
+            matched = (line.find(node.def.pattern) != std::string_view::npos);
 
         if (isExclude) {
             if (!matched) node.output.push_back(rawLineNo);
@@ -245,9 +288,13 @@ void FilterChain::processNewLinesImpl(size_t firstLine, size_t lastLine) {
                 continue;
             }
 
-            bool matched = std::regex_search(content.data(),
-                                             content.data() + content.size(),
-                                             node.compiled);
+            bool matched;
+            if (node.def.useRegex)
+                matched = std::regex_search(content.data(),
+                                            content.data() + content.size(),
+                                            node.compiled);
+            else
+                matched = (content.find(node.def.pattern) != std::string_view::npos);
             if (node.def.exclude) {
                 if (matched) { alive = false; break; }
             } else {
@@ -355,10 +402,11 @@ static json buildFiltersJson(const std::vector<FilterNode>& filters) {
     json arr = json::array();
     for (const auto& node : filters) {
         json f;
-        f["pattern"] = node.def.pattern;
-        f["color"]   = node.def.color;
-        f["enabled"] = node.def.enabled;
-        f["exclude"] = node.def.exclude;
+        f["pattern"]  = node.def.pattern;
+        f["color"]    = node.def.color;
+        f["enabled"]  = node.def.enabled;
+        f["exclude"]  = node.def.exclude;
+        f["useRegex"] = node.def.useRegex;
         arr.push_back(std::move(f));
     }
     return arr;
@@ -406,14 +454,17 @@ bool FilterChain::load(std::string_view path) {
         std::vector<FilterNode> newFilters;
         for (const auto& f : j["filters"]) {
             FilterDef def;
-            def.pattern = f.value("pattern", "");
-            def.color   = f.value("color",   "#FF5555");
-            def.enabled = f.value("enabled", true);
-            def.exclude = f.value("exclude", false);
+            def.pattern  = f.value("pattern",  "");
+            def.color    = f.value("color",    "#FF5555");
+            def.enabled  = f.value("enabled",  true);
+            def.exclude  = f.value("exclude",  false);
+            def.useRegex = f.value("useRegex", false);
 
             FilterNode node;
-            node.def      = std::move(def);
-            node.compiled = std::regex(node.def.pattern);  // May throw
+            node.def = std::move(def);
+            if (node.def.useRegex)
+                node.compiled = std::regex(node.def.pattern,
+                                           std::regex::optimize);  // May throw
             newFilters.push_back(std::move(node));
         }
 

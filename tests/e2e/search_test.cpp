@@ -132,3 +132,59 @@ TEST_F(SearchTest, SearchChineseKeyword) {
         if (ll.highlighted) hl = ll.rawLineNo;
     EXPECT_EQ(hl, 1u);
 }
+
+// ── SearchSpan population and clearing ───────────────────────────────────────
+
+TEST_F(SearchTest, SearchSpansPopulatedAfterSearch) {
+    search("apple");
+    auto data = ctrl_.getViewData(5, 5);
+    // Line 1 ("apple pie") must have a search span covering "apple"
+    bool found = false;
+    for (auto& ll : data.rawPane)
+        if (ll.rawLineNo == 1 && !ll.searchSpans.empty()) { found = true; break; }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(SearchTest, SearchSpansClearedOnEscape) {
+    search("apple");
+    key(ftxui::Event::Character('/'));
+    key(ftxui::Event::Escape);
+    auto data = ctrl_.getViewData(5, 5);
+    for (auto& ll : data.rawPane)
+        EXPECT_TRUE(ll.searchSpans.empty()) << "Line " << ll.rawLineNo << " still has spans";
+}
+
+TEST_F(SearchTest, SearchSpanCoversKeyword) {
+    search("apple");
+    auto data = ctrl_.getViewData(5, 5);
+    // Line 1 is "apple pie\n" — span should cover bytes 0..5
+    for (auto& ll : data.rawPane) {
+        if (ll.rawLineNo == 1) {
+            ASSERT_FALSE(ll.searchSpans.empty());
+            EXPECT_EQ(ll.searchSpans[0].start, 0u);
+            EXPECT_EQ(ll.searchSpans[0].end,   5u);
+            break;
+        }
+    }
+}
+
+// ── Filtered pane search ──────────────────────────────────────────────────────
+
+TEST_F(SearchTest, SearchFilteredPaneFindsOnlyFilteredLines) {
+    // Add filter keeping only "apple" lines (lines 1, 3, 5)
+    key(ftxui::Event::Character('a'));
+    type("apple");
+    key(ftxui::Event::Return);
+    chain_.waitReprocess();
+
+    // Switch focus to filtered pane
+    key(ftxui::Event::Tab);
+
+    // Search "pie" — only line 1 has "pie" among the filtered lines
+    search("pie");
+    auto data = ctrl_.getViewData(5, 5);
+    size_t hl = 0;
+    for (auto& ll : data.filteredPane)
+        if (ll.highlighted) hl = ll.rawLineNo;
+    EXPECT_EQ(hl, 1u);
+}

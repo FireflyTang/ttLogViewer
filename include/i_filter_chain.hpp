@@ -9,9 +9,10 @@
 
 struct FilterDef {
     std::string pattern;
-    std::string color   = {};   // "#RRGGBB"; empty → filled by FilterChain
-    bool        enabled = true;
-    bool        exclude = false;
+    std::string color    = {};   // "#RRGGBB"; empty → filled by FilterChain
+    bool        enabled  = true;
+    bool        exclude  = false;
+    bool        useRegex = false;  // false = literal string; true = regex
 };
 
 // Byte-offset color segment for a single log line.
@@ -52,6 +53,9 @@ public:
 
     virtual size_t           filterCount()            const = 0;
     virtual const FilterDef& filterAt(size_t index)   const = 0;
+
+    virtual void   toggleUseRegex(size_t idx)           = 0;
+    virtual size_t filteredLineCountAt(size_t idx) const = 0;
 
     // ── Query ────────────────────────────────────────────────────────────────
     virtual size_t              filteredLineCount()                          const = 0;

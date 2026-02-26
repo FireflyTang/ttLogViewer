@@ -1,5 +1,8 @@
 #include "render_utils.hpp"
 
+#include <algorithm>
+#include <vector>
+
 using namespace ftxui;
 
 // ── UTF-8 helpers ──────────────────────────────────────────────────────────────
@@ -42,37 +45,59 @@ Color parseHexColor(std::string_view hex) {
 
 Element renderColoredLine(std::string_view content,
                            const std::vector<ColorSpan>& spans,
+                           const std::vector<SearchSpan>& searchSpans,
                            bool folded,
                            int terminalWidth) {
-    // Folded mode: truncate content and append "…"
+    // Folded mode: truncate content and append "…" (no spans applied)
     if (folded && terminalWidth > 2) {
         size_t maxBytes = static_cast<size_t>(terminalWidth - 2);
         std::string_view truncated = truncateUtf8(content, maxBytes);
         return hbox({ text(std::string(truncated)), text("…") | dim });
     }
 
-    // Normal rendering with optional ColorSpan highlighting
-    if (spans.empty())
+    // Fast path: no spans at all
+    if (spans.empty() && searchSpans.empty())
         return text(std::string(content));
 
-    Elements parts;
-    size_t pos = 0;
-
-    for (const auto& span : spans) {
-        if (span.start > pos) {
-            parts.push_back(
-                text(std::string(content.substr(pos, span.start - pos))));
-        }
-        if (span.end > span.start) {
-            parts.push_back(
-                text(std::string(content.substr(span.start, span.end - span.start)))
-                | color(parseHexColor(span.color)));
-        }
-        pos = span.end;
+    // Collect all boundary points from both span types, then render each segment
+    // with the appropriate color / bold+underlined decorators.
+    std::vector<size_t> pts;
+    pts.reserve(2 + spans.size() * 2 + searchSpans.size() * 2);
+    pts.push_back(0);
+    pts.push_back(content.size());
+    for (const auto& s : spans) {
+        pts.push_back(s.start);
+        pts.push_back(s.end);
     }
+    for (const auto& s : searchSpans) {
+        pts.push_back(s.start);
+        pts.push_back(s.end);
+    }
+    std::sort(pts.begin(), pts.end());
+    pts.erase(std::unique(pts.begin(), pts.end()), pts.end());
 
-    if (pos < content.size())
-        parts.push_back(text(std::string(content.substr(pos))));
+    Elements parts;
+    for (size_t i = 0; i + 1 < pts.size(); ++i) {
+        const size_t a = pts[i];
+        const size_t b = pts[i + 1];
+        if (a >= content.size()) break;
+        const size_t len = std::min(b, content.size()) - a;
+
+        // Determine color from the first covering ColorSpan
+        std::string_view col;
+        for (const auto& s : spans)
+            if (s.start <= a && b <= s.end) { col = s.color; break; }
+
+        // Determine whether to apply bold+underlined from SearchSpan
+        bool isMatch = false;
+        for (const auto& s : searchSpans)
+            if (s.start <= a && b <= s.end) { isMatch = true; break; }
+
+        Element e = text(std::string(content.substr(a, len)));
+        if (!col.empty())  e = e | color(parseHexColor(col));
+        if (isMatch)       e = e | bold | underlined;
+        parts.push_back(std::move(e));
+    }
 
     if (parts.empty())
         return text(std::string(content));

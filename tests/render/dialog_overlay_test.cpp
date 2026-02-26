@@ -7,10 +7,22 @@ TEST_F(DialogOverlayTest, NoDialogByDefault) {
     EXPECT_FALSE(ctrl_.getViewData(3, 3).showDialog);
 }
 
+// Sequence to trigger the "无效正则" dialog:
+// Add "ERROR" as a string filter, toggle to regex mode ('x'),
+// edit it with an invalid regex "[invalid", then press Return.
+// Must be inlined in each test (protected base members not accessible from free fns).
+
 TEST_F(DialogOverlayTest, InvalidRegexShowsDialog) {
-    key(ftxui::Event::Character('a'));
-    key(ftxui::Event::Character('['));  // '[' alone is invalid regex
-    key(ftxui::Event::Return);
+    using E = ftxui::Event;
+    key(E::Character('a'));
+    for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
+    key(E::Return);
+    chain_.waitReprocess();
+    key(E::Character('x'));   // Toggle to regex mode
+    key(E::Character('e'));   // Enter FilterEdit
+    for (int i = 0; i < 5; ++i) key(E::Backspace);
+    for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
+    key(E::Return);           // Triggers "无效正则" dialog
 
     auto d = ctrl_.getViewData(3, 3);
     EXPECT_TRUE(d.showDialog);
@@ -18,19 +30,33 @@ TEST_F(DialogOverlayTest, InvalidRegexShowsDialog) {
 }
 
 TEST_F(DialogOverlayTest, AnyKeyClosesInfoDialog) {
-    key(ftxui::Event::Character('a'));
-    key(ftxui::Event::Character('['));
-    key(ftxui::Event::Return);
+    using E = ftxui::Event;
+    key(E::Character('a'));
+    for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
+    key(E::Return);
+    chain_.waitReprocess();
+    key(E::Character('x'));
+    key(E::Character('e'));
+    for (int i = 0; i < 5; ++i) key(E::Backspace);
+    for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
+    key(E::Return);
     ASSERT_TRUE(ctrl_.getViewData(3, 3).showDialog);
 
-    key(ftxui::Event::Character('x'));  // Any key closes
+    key(E::Character('q'));  // Any key closes
     EXPECT_FALSE(ctrl_.getViewData(3, 3).showDialog);
 }
 
 TEST_F(DialogOverlayTest, DialogTitleBodyRendered) {
-    key(ftxui::Event::Character('a'));
-    key(ftxui::Event::Character('['));
-    key(ftxui::Event::Return);
+    using E = ftxui::Event;
+    key(E::Character('a'));
+    for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
+    key(E::Return);
+    chain_.waitReprocess();
+    key(E::Character('x'));
+    key(E::Character('e'));
+    for (int i = 0; i < 5; ++i) key(E::Backspace);
+    for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
+    key(E::Return);
     EXPECT_NE(renderCtrl().find("无效正则"), std::string::npos);
 }
 

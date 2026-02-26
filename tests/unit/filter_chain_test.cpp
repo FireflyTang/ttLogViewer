@@ -104,7 +104,8 @@ TEST_F(FilterChainTest, ExcludeFilterNoMatch) {
 }
 
 TEST_F(FilterChainTest, ExcludeFilterAllMatch) {
-    ASSERT_TRUE(chain_.append({.pattern = ".", .exclude = true}));  // match any non-empty
+    // Use regex mode so "." matches any character (every non-empty line)
+    ASSERT_TRUE(chain_.append({.pattern = ".", .exclude = true, .useRegex = true}));  // match any non-empty
 
     std::promise<void> done;
     chain_.reprocess(0, nullptr, [&]{ done.set_value(); });
@@ -172,7 +173,8 @@ TEST_F(FilterChainTest, EditFilterUpdatesPattern) {
 
 TEST_F(FilterChainTest, EditInvalidRegexFails) {
     chain_.append({.pattern = "ERROR"});
-    EXPECT_FALSE(chain_.edit(0, {.pattern = "[invalid"}));
+    // Must use useRegex=true so the pattern is compiled as a regex
+    EXPECT_FALSE(chain_.edit(0, {.pattern = "[invalid", .useRegex = true}));
     EXPECT_EQ(chain_.filterAt(0).pattern, "ERROR");  // unchanged
 }
 
@@ -259,8 +261,15 @@ TEST_F(FilterChainTest, ComputeColorsExcludeFilterSkipped) {
 // ── Invalid regex ─────────────────────────────────────────────────────────────
 
 TEST_F(FilterChainTest, AppendInvalidRegexFails) {
-    EXPECT_FALSE(chain_.append({.pattern = "[invalid"}));
+    // Must use useRegex=true so the pattern is compiled as a regex
+    EXPECT_FALSE(chain_.append({.pattern = "[invalid", .useRegex = true}));
     EXPECT_EQ(chain_.filterCount(), 0u);
+}
+
+TEST_F(FilterChainTest, AppendInvalidPatternSucceedsInStringMode) {
+    // In string mode (default), any non-empty pattern is valid (no regex compile)
+    EXPECT_TRUE(chain_.append({.pattern = "[invalid"}));
+    EXPECT_EQ(chain_.filterCount(), 1u);
 }
 
 TEST_F(FilterChainTest, AppendEmptyPatternFails) {
@@ -388,4 +397,86 @@ TEST_F(FilterChainTest, AppendDuringReprocessRestarts) {
     // Both filters should be active and produce a consistent non-zero result
     EXPECT_EQ(chain_.filterCount(), 2u);
     EXPECT_GT(chain_.filteredLineCount(), 0u);
+}
+
+// ── String mode vs regex mode ─────────────────────────────────────────────────
+
+TEST_F(FilterChainTest, StringModeDoesNotTreatDotAsWildcard) {
+    // Pattern "." as string should only match a literal period, not every character
+    ASSERT_TRUE(chain_.append({.pattern = "."}));  // useRegex=false by default
+
+    std::promise<void> done;
+    chain_.reprocess(0, nullptr, [&]{ done.set_value(); });
+    waitForReprocess(done);
+
+    // None of the 10 test lines contain a literal period
+    EXPECT_EQ(chain_.filteredLineCount(), 0u);
+}
+
+TEST_F(FilterChainTest, ToggleUseRegexFlipsMode) {
+    chain_.append({.pattern = "ERROR"});
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+
+    chain_.toggleUseRegex(0);
+    EXPECT_TRUE(chain_.filterAt(0).useRegex);
+
+    chain_.toggleUseRegex(0);
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+}
+
+TEST_F(FilterChainTest, ToggleUseRegexInvalidPatternRevertsMode) {
+    // "[invalid" is not a valid regex; toggle should revert if it fails
+    ASSERT_TRUE(chain_.append({.pattern = "[invalid"}));  // string mode, always succeeds
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+
+    chain_.toggleUseRegex(0);
+    // Should stay false because "[invalid" can't compile as regex
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+}
+
+TEST_F(FilterChainTest, FilteredLineCountAtReturnsStageOutput) {
+    ASSERT_TRUE(chain_.append({.pattern = "ERROR"}));
+
+    std::promise<void> done;
+    chain_.reprocess(0, nullptr, [&]{ done.set_value(); });
+    waitForReprocess(done);
+
+    // ERROR matches 2 lines (line3 and line7)
+    EXPECT_EQ(chain_.filteredLineCountAt(0), 2u);
+}
+
+TEST_F(FilterChainTest, FilteredLineCountAtOutOfRangeReturnsZero) {
+    EXPECT_EQ(chain_.filteredLineCountAt(99), 0u);
+}
+
+// ── String mode matching via computeColors ────────────────────────────────────
+
+TEST_F(FilterChainTest, ComputeColorsStringMode) {
+    // Literal "." should only match actual period characters
+    ASSERT_TRUE(chain_.append({.pattern = "ERROR", .color = "#FF0000"}));  // string mode
+
+    // "ERROR: something bad" contains "ERROR" as literal
+    auto spans = chain_.computeColors(3, "ERROR: something bad");
+    ASSERT_FALSE(spans.empty());
+    EXPECT_EQ(spans[0].start, 0u);
+    EXPECT_EQ(spans[0].end,   5u);
+}
+
+// ── JSON round-trip with useRegex ─────────────────────────────────────────────
+
+TEST_F(FilterChainTest, SaveLoadRoundTripWithUseRegex) {
+    chain_.append({.pattern = "ERROR", .color = "#FF0000",
+                   .enabled = true, .exclude = false, .useRegex = true});
+    chain_.append({.pattern = "WARN",  .color = "#FFFF00",
+                   .enabled = true, .exclude = false, .useRegex = false});
+
+    TempFile sessionFile("");
+    chain_.save(sessionFile.path());
+
+    FilterChain chain2(reader_);
+    ASSERT_TRUE(chain2.load(sessionFile.path()));
+
+    ASSERT_EQ(chain2.filterCount(), 2u);
+    EXPECT_TRUE(chain2.filterAt(0).useRegex);
+    EXPECT_FALSE(chain2.filterAt(1).useRegex);
 }

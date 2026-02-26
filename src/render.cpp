@@ -85,7 +85,8 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
             parts.push_back(text(std::to_string(ll.rawLineNo) + " ") | dim);
         parts.push_back(text(ll.highlighted ? "▶ " : "  "));
         parts.push_back(
-            renderColoredLine(ll.content, ll.colors, ll.folded, contentWidth) | flex);
+            renderColoredLine(ll.content, ll.colors, ll.searchSpans,
+                              ll.folded, contentWidth) | flex);
 
         Element row = hbox(std::move(parts));
 
@@ -106,7 +107,9 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
     items.reserve(tags.size());
     for (const auto& tag : tags) {
         // Use std::format for efficient string formatting (C++20)
-        std::string label = std::format(" [{}:{}] ", tag.number, tag.pattern);
+        // Format: " [1:pattern](N) " or " [1R:pattern](N) " for regex mode
+        std::string label = std::format(" [{}{}:{}]({}) ",
+            tag.number, tag.useRegex ? "R" : "", tag.pattern, tag.matchCount);
         Element e = text(std::move(label));
         if (tag.selected)  e = e | inverted;
         if (!tag.enabled)  e = e | dim;
