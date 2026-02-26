@@ -82,9 +82,14 @@ TEST_F(InputFlowTest, AddFilterStringModeAnyPatternValid) {
 TEST_F(InputFlowTest, EditFilterRegexModeInvalidPatternInvalid) {
     // Add a filter, toggle to regex mode via 'x', then edit with an invalid regex.
     // In regex mode, invalid patterns should make inputValid=false.
+    //
+    // waitReprocess() is required: the reprocess background thread started by
+    // Return could overwrite the toggleUseRegex change if it swaps filters_
+    // back after the main thread has already set useRegex=true.
     key(ftxui::Event::Character('a'));
     type("ERROR");
     key(ftxui::Event::Return);
+    chain_.waitReprocess();             // ensure BG thread finishes before toggling
     key(ftxui::Event::Character('x'));  // Toggle to regex mode
     key(ftxui::Event::Character('e'));  // Enter edit mode
     // Clear "ERROR" and type an invalid regex

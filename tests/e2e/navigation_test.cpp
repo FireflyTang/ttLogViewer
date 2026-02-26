@@ -2,6 +2,7 @@
 #include <gmock/gmock.h>
 #include <ftxui/component/event.hpp>
 
+#include "app_config.hpp"
 #include "app_controller.hpp"
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
@@ -173,6 +174,13 @@ TEST_F(NavigationTest, ArrowRightIncreasesHScroll) {
     EXPECT_GT(ctrl_.getViewData(5, 5).rawHScroll, 0u);
 }
 
+TEST_F(NavigationTest, ArrowRightScrollsByConfiguredStep) {
+    // One right-arrow press must scroll by exactly AppConfig::hScrollStep bytes.
+    key(ftxui::Event::ArrowRight);
+    const size_t expected = static_cast<size_t>(AppConfig::global().hScrollStep);
+    EXPECT_EQ(ctrl_.getViewData(5, 5).rawHScroll, expected);
+}
+
 TEST_F(NavigationTest, ArrowLeftDecreasesHScroll) {
     key(ftxui::Event::ArrowRight);
     key(ftxui::Event::ArrowRight);
@@ -295,14 +303,14 @@ TEST_F(NavigationTest, SearchKeywordClearedOnEmptySearch) {
 
 TEST_F(NavigationTest, PaneHeightRatio6to4) {
     // With uiOverheadRows=6 (default), available = 26 - 6 = 20
-    // raw = 20 * 6/10 = 12,  filt = 20 - 12 = 8
+    // raw = int(20 * 0.6) = 12,  filt = 20 - 12 = 8
     ctrl_.onTerminalResize(80, 26);
     EXPECT_EQ(ctrl_.rawPaneHeight(),  12);
     EXPECT_EQ(ctrl_.filtPaneHeight(),  8);
 }
 
 TEST_F(NavigationTest, PaneHeightRatio6to4SmallTerminal) {
-    // With only 10 available rows: raw = 6, filt = 4
+    // With only 10 available rows: raw = int(10 * 0.6) = 6, filt = 4
     // uiOverheadRows=6, so height=16 → available=10
     ctrl_.onTerminalResize(80, 16);
     EXPECT_EQ(ctrl_.rawPaneHeight(),  6);

@@ -22,14 +22,19 @@ static std::string writeTempJson(const std::string& content) {
 
 TEST(AppConfig, DefaultValues) {
     AppConfig cfg;  // freshly default-constructed, global not involved
-    EXPECT_EQ(cfg.uiOverheadRows,        6);
-    EXPECT_EQ(cfg.dialogMaxWidth,        60);
-    EXPECT_EQ(cfg.defaultTerminalWidth,  80);
-    EXPECT_EQ(cfg.watcherTickCount,      50);
-    EXPECT_EQ(cfg.watcherTickIntervalMs, 10);
-    EXPECT_EQ(cfg.searchReserveFraction, 10);
-    EXPECT_EQ(cfg.searchReserveMax,      size_t(10000));
-    EXPECT_EQ(cfg.jsonIndent,            2);
+    EXPECT_EQ(cfg.uiOverheadRows,             6);
+    EXPECT_EQ(cfg.dialogMaxWidth,             60);
+    EXPECT_EQ(cfg.defaultTerminalWidth,       80);
+    EXPECT_EQ(cfg.watcherTickCount,           50);
+    EXPECT_EQ(cfg.watcherTickIntervalMs,      10);
+    EXPECT_EQ(cfg.searchReserveFraction,      10);
+    EXPECT_EQ(cfg.searchReserveMax,           size_t(10000));
+    EXPECT_EQ(cfg.jsonIndent,                 2);
+    // Navigation / layout defaults added in refactor
+    EXPECT_EQ(cfg.hScrollStep,               4);
+    EXPECT_EQ(cfg.minLineNoWidth,            6);
+    EXPECT_EQ(cfg.reprocessTimeoutSeconds,   30);
+    EXPECT_DOUBLE_EQ(cfg.rawPaneFraction,    0.6);
 }
 
 // ── loadFromFile overrides specified fields ────────────────────────────────────
@@ -47,6 +52,28 @@ TEST(AppConfig, LoadFromJsonOverridesFields) {
     EXPECT_EQ(cfg.jsonIndent,      4);
     // Other fields keep their defaults
     EXPECT_EQ(cfg.uiOverheadRows, 6);
+
+    fs::remove(p);
+}
+
+TEST(AppConfig, LoadNewNavigationAndLayoutFields) {
+    const std::string p = writeTempJson(R"({
+        "hScrollStep":             8,
+        "minLineNoWidth":          4,
+        "reprocessTimeoutSeconds": 60,
+        "rawPaneFraction":         0.5
+    })");
+
+    AppConfig cfg;
+    ASSERT_TRUE(cfg.loadFromFile(p));
+
+    EXPECT_EQ(cfg.hScrollStep,              8);
+    EXPECT_EQ(cfg.minLineNoWidth,           4);
+    EXPECT_EQ(cfg.reprocessTimeoutSeconds,  60);
+    EXPECT_DOUBLE_EQ(cfg.rawPaneFraction,   0.5);
+    // Unrelated fields keep their defaults
+    EXPECT_EQ(cfg.uiOverheadRows,           6);
+    EXPECT_EQ(cfg.jsonIndent,               2);
 
     fs::remove(p);
 }
