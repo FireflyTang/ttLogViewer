@@ -49,14 +49,14 @@ TEST_F(InputLineTest, EscExitsFilterAddMode) {
 
 TEST_F(InputLineTest, SearchKeywordAppearsInNoneMode) {
     // After submitting a search, None mode shows the keyword and jump hint.
-    // "n/N:跳转" only appears when a search keyword is active.
+    // "n/p:跳转" only appears when a search keyword is active.
     key(ftxui::Event::Character('/'));
     for (char c : std::string("line1"))
         key(ftxui::Event::Character(c));
     key(ftxui::Event::Return);
     std::string out = renderCtrl();
     EXPECT_NE(out.find("line1"), std::string::npos);
-    EXPECT_NE(out.find("n/N"), std::string::npos);
+    EXPECT_NE(out.find("n/p"), std::string::npos);
 }
 
 TEST_F(InputLineTest, SearchKeywordShowsResultCount) {

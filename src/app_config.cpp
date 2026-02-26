@@ -29,14 +29,18 @@ bool AppConfig::loadFromFile(const std::string& path) {
         // Override only fields that are explicitly present in the JSON.
         // j.value(key, default) returns the default when the key is absent or
         // has the wrong type, so partial config files work correctly.
-        uiOverheadRows        = j.value("uiOverheadRows",        uiOverheadRows);
-        dialogMaxWidth        = j.value("dialogMaxWidth",         dialogMaxWidth);
-        defaultTerminalWidth  = j.value("defaultTerminalWidth",   defaultTerminalWidth);
-        watcherTickCount      = j.value("watcherTickCount",       watcherTickCount);
-        watcherTickIntervalMs = j.value("watcherTickIntervalMs",  watcherTickIntervalMs);
-        searchReserveFraction = j.value("searchReserveFraction",  searchReserveFraction);
-        searchReserveMax      = j.value("searchReserveMax",       searchReserveMax);
-        jsonIndent            = j.value("jsonIndent",             jsonIndent);
+        uiOverheadRows            = j.value("uiOverheadRows",            uiOverheadRows);
+        dialogMaxWidth            = j.value("dialogMaxWidth",            dialogMaxWidth);
+        defaultTerminalWidth      = j.value("defaultTerminalWidth",      defaultTerminalWidth);
+        watcherTickCount          = j.value("watcherTickCount",          watcherTickCount);
+        watcherTickIntervalMs     = j.value("watcherTickIntervalMs",     watcherTickIntervalMs);
+        searchReserveFraction     = j.value("searchReserveFraction",     searchReserveFraction);
+        searchReserveMax          = j.value("searchReserveMax",          searchReserveMax);
+        jsonIndent                = j.value("jsonIndent",                jsonIndent);
+        hScrollStep               = j.value("hScrollStep",               hScrollStep);
+        minLineNoWidth            = j.value("minLineNoWidth",            minLineNoWidth);
+        reprocessTimeoutSeconds   = j.value("reprocessTimeoutSeconds",   reprocessTimeoutSeconds);
+        rawPaneFraction           = j.value("rawPaneFraction",           rawPaneFraction);
 
         return true;
     } catch (const nlohmann::json::exception&) {

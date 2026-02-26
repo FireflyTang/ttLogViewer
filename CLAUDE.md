@@ -133,7 +133,9 @@ CMake 构建时自动生成 `${CMAKE_BINARY_DIR}/include/version.hpp`，包含 `
    ```
 4. **提交 + Tag**：
    ```bash
-   git add -A
+   # 仅暂存与发版相关的文件（避免意外包含 .env 等敏感文件）
+   git add CMakeLists.txt implementation.md README.md CLAUDE.md
+   # 如有其他变更文件按需追加
    git commit -m "Release vX.Y.Z: ..."
    git tag vX.Y.Z
    ```

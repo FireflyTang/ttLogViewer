@@ -10,14 +10,18 @@
 // JSON schema example (~/.ttlogviewer.json or %USERPROFILE%\.ttlogviewer.json):
 //
 //   {
-//     "uiOverheadRows":        6,
-//     "dialogMaxWidth":        60,
-//     "defaultTerminalWidth":  80,
-//     "watcherTickCount":      50,
-//     "watcherTickIntervalMs": 10,
-//     "searchReserveFraction": 10,
-//     "searchReserveMax":      10000,
-//     "jsonIndent":            2
+//     "uiOverheadRows":             6,
+//     "dialogMaxWidth":             60,
+//     "defaultTerminalWidth":       80,
+//     "watcherTickCount":           50,
+//     "watcherTickIntervalMs":      10,
+//     "searchReserveFraction":      10,
+//     "searchReserveMax":           10000,
+//     "jsonIndent":                 2,
+//     "hScrollStep":               4,
+//     "minLineNoWidth":            6,
+//     "reprocessTimeoutSeconds":   30,
+//     "rawPaneFraction":           0.6
 //   }
 //
 // Only the fields present in the file are overridden; absent fields keep their
@@ -50,6 +54,23 @@ struct AppConfig {
     // ── Session / export ──────────────────────────────────────────────────────
     // Number of spaces used for JSON pretty-printing.
     int jsonIndent = 2;
+
+    // ── Navigation ────────────────────────────────────────────────────────────
+    // Number of bytes to scroll per ArrowLeft/ArrowRight press.
+    int hScrollStep = 4;
+
+    // Minimum width of the line-number column, in digits.
+    // Prevents layout shifts for files under 10^minLineNoWidth lines.
+    int minLineNoWidth = 6;
+
+    // ── Reprocess ─────────────────────────────────────────────────────────────
+    // Seconds of filter reprocessing before showing the "still running" dialog.
+    int reprocessTimeoutSeconds = 30;
+
+    // ── Pane layout ───────────────────────────────────────────────────────────
+    // Raw log pane share of available height (0.0–1.0).
+    // The filtered pane takes the remainder.
+    double rawPaneFraction = 0.6;
 
     // ── Instance loading ──────────────────────────────────────────────────────
 

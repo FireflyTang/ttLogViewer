@@ -25,7 +25,7 @@ ftxui::Color parseHexColor(std::string_view hex);
 // ── Search span ────────────────────────────────────────────────────────────────
 
 // Byte-range of a search keyword match within a log line.
-// Rendered with bold + underlined to distinguish from filter color spans.
+// Rendered with inverted color to distinguish from filter color spans.
 struct SearchSpan {
     size_t start;
     size_t end;
@@ -36,7 +36,7 @@ struct SearchSpan {
 // Render a single log line with optional ColorSpan and SearchSpan highlighting.
 //
 // ColorSpans apply foreground color to matched filter patterns.
-// SearchSpans apply bold + underlined to searched keyword matches.
+// SearchSpans apply inverted color to searched keyword matches.
 //
 // If `folded` is true and `terminalWidth` > 2, the content is truncated to
 // `terminalWidth - 2` bytes (UTF-8 boundary aligned) and "…" is appended.

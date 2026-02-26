@@ -24,6 +24,8 @@ static const char* kPalette[] = {
     "#FF55AA",  // Pink
 };
 static constexpr size_t kPaletteSize = std::size(kPalette);
+static_assert(kPaletteSize == kDefaultColorPaletteSize,
+              "kPalette size must match kDefaultColorPaletteSize in i_filter_chain.hpp");
 
 // Declared in i_filter_chain.hpp.
 const char* defaultColor(size_t filterIndex) {
@@ -462,7 +464,7 @@ bool FilterChain::load(std::string_view path) {
         for (const auto& f : j["filters"]) {
             FilterDef def;
             def.pattern  = f.value("pattern",  "");
-            def.color    = f.value("color",    "#FF5555");
+            def.color    = f.value("color",    defaultColor(0));
             def.enabled  = f.value("enabled",  true);
             def.exclude  = f.value("exclude",  false);
             def.useRegex = f.value("useRegex", false);

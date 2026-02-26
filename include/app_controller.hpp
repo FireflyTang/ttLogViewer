@@ -46,7 +46,7 @@ struct LogLine {
     std::vector<ColorSpan>  colors;
     std::vector<SearchSpan> searchSpans;   // inverted-color search matches
     bool                    highlighted = false;
-    bool                    folded      = false;  // Phase 3
+    bool                    folded      = false;
 };
 
 struct ViewData {
@@ -56,8 +56,8 @@ struct ViewData {
     size_t      totalLines   = 0;
     size_t      newLineCount = 0;
     bool        isIndexing   = false;
-    bool        showLineNumbers = false;  // Phase 3
-    int         terminalWidth   = 80;    // Phase 3: for fold truncation
+    bool        showLineNumbers = false;
+    int         terminalWidth   = 80;
 
     // ── Log panes ─────────────────────────────────────────────────────────────
     std::vector<LogLine> rawPane;
@@ -202,9 +202,8 @@ private:
     // ── Reprocess timeout ─────────────────────────────────────────────────────
     std::chrono::steady_clock::time_point reprocessStartTime_;
     bool reprocessTimeoutShown_ = false;
-    static constexpr int kReprocessTimeoutSeconds = 30;
 
-    // ── Phase 3 state ─────────────────────────────────────────────────────────
+    // ── Display state ─────────────────────────────────────────────────────────
     bool                       showLineNumbers_ = true;
     std::unordered_set<size_t> foldedLines_;       // rawLineNo values that are folded
     int                        lastTerminalWidth_ = 80;
@@ -233,7 +232,7 @@ private:
     bool handleKeyGotoLine(const ftxui::Event& event);
     bool handleKeyOpenFile(const ftxui::Event& event);
     bool handleKeyDialog(const ftxui::Event& event);
-    bool handleKeyExportConfirm(const ftxui::Event& event);  // Phase 3
+    bool handleKeyExportConfirm(const ftxui::Event& event);
 
     // Sub-handlers called by handleKeyNone()
     bool handleNavKeys(const ftxui::Event& event, int activePh);
@@ -264,8 +263,9 @@ private:
     void jumpToSearchResult(size_t idx);
     // Step through search results by direction (+1 forward, -1 backward).
     void stepSearch(int dir);
+    // Clear all active search state (results, keyword, regex, pane flag).
+    void clearSearch();
 
-    // ── Phase 3 helpers ───────────────────────────────────────────────────────
     // Toggle fold state for the line currently under the cursor.
     void toggleFoldCurrentLine();
 

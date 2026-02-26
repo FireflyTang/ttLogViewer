@@ -17,7 +17,6 @@ using namespace ftxui;
 
 // Full help text shown by the 'h' key.  Extracted here to keep handleModeKeys()
 // readable and to make it easy to update the text in one place.
-static constexpr size_t kHScrollStep = 4;   // bytes per ArrowLeft/ArrowRight press
 
 static constexpr std::string_view kHelpText =
     "↑↓: 移动光标\n"
@@ -153,11 +152,7 @@ bool AppController::handleKey(const Event& event) {
 
     // ESC in None mode with an active search → clear search state.
     if (event == Event::Escape && !searchKeyword_.empty() && inputMode_ == InputMode::None) {
-        searchResults_.clear();
-        searchIndex_      = 0;
-        searchKeyword_.clear();
-        searchInFiltered_ = false;
-        searchRegex_.reset();
+        clearSearch();
         return true;
     }
 
@@ -215,11 +210,7 @@ bool AppController::handleNavKeys(const Event& event, int activePh) {
 
     // Focus switch — also clear any active search so old results don't persist
     if (event == Event::Tab || event == Event::TabReverse) {
-        searchResults_.clear();
-        searchIndex_      = 0;
-        searchKeyword_.clear();
-        searchInFiltered_ = false;
-        searchRegex_.reset();
+        clearSearch();
         focus_ = (focus_ == FocusArea::Raw) ? FocusArea::Filtered : FocusArea::Raw;
         return true;
     }
@@ -227,12 +218,12 @@ bool AppController::handleNavKeys(const Event& event, int activePh) {
     // Horizontal scroll
     if (event == Event::ArrowLeft) {
         PaneState& ps = activeState();
-        ps.hScrollOffset = (ps.hScrollOffset >= kHScrollStep)
-                           ? ps.hScrollOffset - kHScrollStep : 0;
+        const size_t step = static_cast<size_t>(AppConfig::global().hScrollStep);
+        ps.hScrollOffset = (ps.hScrollOffset >= step) ? ps.hScrollOffset - step : 0;
         return true;
     }
     if (event == Event::ArrowRight) {
-        activeState().hScrollOffset += kHScrollStep;
+        activeState().hScrollOffset += static_cast<size_t>(AppConfig::global().hScrollStep);
         return true;
     }
 
@@ -452,11 +443,7 @@ bool AppController::handleKeyFilterInput(const Event& event) {
 bool AppController::handleKeySearch(const Event& event) {
     // Special handling for Escape - also clear search results
     if (event == Event::Escape) {
-        searchResults_.clear();
-        searchIndex_      = 0;
-        searchKeyword_.clear();
-        searchInFiltered_ = false;
-        searchRegex_.reset();
+        clearSearch();
         exitInputMode();
         return true;
     }
@@ -803,7 +790,7 @@ void AppController::onTerminalResize(int width, int height) {
     if (width > 0) lastTerminalWidth_ = width;
     const int overhead  = AppConfig::global().uiOverheadRows;
     const int available = std::max(2, height - overhead);
-    lastRawPaneHeight_      = available * 6 / 10;
+    lastRawPaneHeight_      = static_cast<int>(available * AppConfig::global().rawPaneFraction);
     lastFilteredPaneHeight_ = available - lastRawPaneHeight_;
 
     clampScroll(rawState_,      reader_.lineCount(),        lastRawPaneHeight_);
@@ -918,11 +905,12 @@ void AppController::triggerReprocess(size_t fromFilter) {
                 using namespace std::chrono;
                 auto elapsed = duration_cast<seconds>(
                     steady_clock::now() - reprocessStartTime_).count();
-                if (elapsed >= kReprocessTimeoutSeconds) {
+                if (elapsed >= AppConfig::global().reprocessTimeoutSeconds) {
                     reprocessTimeoutShown_ = true;
                     showDialog_      = true;
                     dialogTitle_     = "过滤耗时较长";
-                    dialogBody_      = "过滤已进行超过30秒，是否继续等待？";
+                    dialogBody_      = std::format("过滤已进行超过{}秒，是否继续等待？",
+                                                   AppConfig::global().reprocessTimeoutSeconds);
                     dialogHasChoice_ = true;
                     dialogYesAction_ = [this] { closeDialog(); };
                     dialogNoAction_  = [this] {
@@ -1048,6 +1036,16 @@ void AppController::jumpToSearchResult(size_t idx) {
             return;
         }
     }
+}
+
+// ── clearSearch ───────────────────────────────────────────────────────────────
+
+void AppController::clearSearch() {
+    searchResults_.clear();
+    searchIndex_      = 0;
+    searchKeyword_.clear();
+    searchInFiltered_ = false;
+    searchRegex_.reset();
 }
 
 // ── stepSearch ────────────────────────────────────────────────────────────────

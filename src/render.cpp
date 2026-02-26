@@ -74,15 +74,15 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         return text("") | flex;
 
     // Use the total file line count to fix the line-number column width for the
-    // entire file, with a minimum of 6 digits.
+    // entire file, with a configurable minimum (default 6 digits).
     // The minimum prevents layout jumps for the vast majority of real-world log
-    // files (< 1 000 000 lines) and also covers realtime files that grow past a
-    // 10× boundary (e.g., 999 → 1000 lines) without shifting the content column.
-    static constexpr int kMinLineNoWidth = 6;
+    // files and also covers realtime files that grow past a 10× boundary
+    // (e.g., 999 → 1000 lines) without shifting the content column.
     int maxLineNoW = 0;
     if (showLineNumbers) {
+        const int minW = AppConfig::global().minLineNoWidth;
         int digitCount = static_cast<int>(std::to_string(totalLines).size());
-        maxLineNoW = std::max(digitCount, kMinLineNoWidth);
+        maxLineNoW = std::max(digitCount, minW);
     }
 
     Elements rows;
@@ -151,7 +151,7 @@ static Element renderInputLine(const ViewData& data) {
                     : "无结果";
                 return hbox({ text(" /") | dim,
                               text(data.searchKeyword) | bold,
-                              text("  (" + cnt + ")  n/N:跳转  Esc:清除") | dim });
+                              text("  (" + cnt + ")  n/p:跳转  Esc:清除") | dim });
             }
             return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
 
