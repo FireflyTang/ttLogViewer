@@ -1009,6 +1009,10 @@ while (!stopped_) {
   - 点击窗格区域切换焦点（原始区 / 过滤区）
   - 实现方式：`main.cpp` 开启 `screen.EnableMouse()`；`render.cpp` 的 `CatchEvent` 处理 `Event::Mouse`（`WheelUp/Down` 转发滚动，点击 Y 坐标判断所属窗格后切换焦点）
 
+- **超长行查看**：当前行超出终端宽度时内容被静默截断（FTXUI `text()` 不换行）。计划提供两种补充手段：
+  - **水平滚动**：`←` / `→` 调整当前窗格的水平偏移（`hScrollOffset`），视口按列平移；`AppController::getViewData()` 携带偏移量，`render.cpp` 截取对应字节窗口后渲染
+  - **行内容展开**：按 `Enter` 在弹窗中展示当前高亮行的完整内容，弹窗内可用 `←`/`→`/`PgUp`/`PgDn` 水平翻页，按 `Esc` 关闭
+
 ---
 
 ## 未来功能
