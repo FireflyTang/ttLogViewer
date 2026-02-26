@@ -73,12 +73,16 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         return text("") | flex;
 
     // Use the total file line count to fix the line-number column width for the
-    // entire file.  This prevents the content column from jumping when scrolling
-    // across a digit-count boundary (e.g., lines 9→10) or when new lines are
-    // appended in realtime mode and the total crosses a 10× boundary.
-    int maxLineNoW = showLineNumbers
-        ? static_cast<int>(std::to_string(totalLines).size())
-        : 0;
+    // entire file, with a minimum of 6 digits.
+    // The minimum prevents layout jumps for the vast majority of real-world log
+    // files (< 1 000 000 lines) and also covers realtime files that grow past a
+    // 10× boundary (e.g., 999 → 1000 lines) without shifting the content column.
+    static constexpr int kMinLineNoWidth = 6;
+    int maxLineNoW = 0;
+    if (showLineNumbers) {
+        int digitCount = static_cast<int>(std::to_string(totalLines).size());
+        maxLineNoW = std::max(digitCount, kMinLineNoWidth);
+    }
 
     Elements rows;
     rows.reserve(lines.size());

@@ -216,8 +216,8 @@ TEST(LogPaneRender, LineNumbersAndFoldingTogether) {
 // ── v0.9.5: right-aligned line numbers ───────────────────────────────────────
 
 TEST(LogPaneRender, LineNumbersRightAligned) {
-    // 11-line file → totalLines = 11 → maxLineNoW = 2
-    // Line 1 must render as " 1 " (right-aligned with a leading space)
+    // Minimum column width is 6, so even an 11-line file uses 6-digit columns.
+    // Line 1 must render as "     1 " (5 leading spaces + "1" + trailing space).
     std::string content;
     for (int i = 1; i <= 11; ++i)
         content += "x\n";
@@ -236,9 +236,9 @@ TEST(LogPaneRender, LineNumbersRightAligned) {
     Render(s, comp->Render());
     std::string out = s.ToString();
 
-    // Single-digit line 1 should be padded to width 2: " 1" + trailing space = " 1 "
-    EXPECT_NE(out.find(" 1 "), std::string::npos)
-        << "line 1 should be right-aligned with a leading space when totalLines >= 10";
+    // Line 1 right-aligned to 6-digit column: "     1 " (5 leading spaces)
+    EXPECT_NE(out.find("     1 "), std::string::npos)
+        << "line 1 should be right-aligned to the 6-digit minimum column";
 }
 
 // ── Phase 3: folding only affects the folded line ─────────────────────────────
