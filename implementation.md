@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.5（UX 改进）
-> 测试：281 个，全部通过
+> 版本：v0.9.6（搜索 UX 改进 + 过滤器圆点优化）
+> 测试：288 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -283,6 +283,20 @@ CreateMainComponent(controller, screen)
 - `handleKey` ESC 取消：在 None 模式检查 `showProgress_ && inputMode_==None`，立即 `cancelReprocess()`（不等 30s 超时）
 - `main.cpp`：删除启动时自动打开 `sessionLastFile` 的逻辑（过滤器仍持久化，只不再自动打开文件）
 - `cmake/version.rc.in`：新增 Windows VERSIONINFO 资源模板，CMake configure_file 生成，`src/CMakeLists.txt` WIN32 条件引入，使"打开方式"显示正确的 ProductName
+
+**v0.9.6 变更**：
+- `render_utils.cpp` `renderColoredLine`：搜索匹配段由 `bold | underlined` 改为 `inverted`（反色更醒目）
+- `render.cpp` `renderLogPane`：新增 `bool searchActive` 参数；激活搜索时 `▶` 标记和整行反色均被抑制，避免光标随搜索跳动
+- `render.cpp` `renderFilterBar`：圆点从 `●`（U+25CF）改为 `⬤`（U+2B24 BLACK LARGE CIRCLE）；标签末尾去掉空格使圆点紧贴匹配数；label+dot 合为一个 `hbox` 元素再统一应用 `inverted`/`dim`，选中时整体高亮
+- `render.cpp` `renderInputLine` Search 分支：显示 `[正则]`/`[字符串]` 模式指示和 `Tab:切换` 提示（取代原 `inputPrompt`）
+- `render.cpp` 鼠标滚轮：`dir * 3` → `dir * 1`，每次滚动 1 行
+- `app_controller.cpp` `computeSearchSpans`：增加 `bool useRegex, const std::optional<std::regex>& regex` 参数，支持正则匹配路径（`std::sregex_iterator`）
+- `app_controller.cpp` `runSearch`：若 `searchUseRegex_` 为真则编译 regex（失败时回退为字面匹配），用闭包 `lineMatches` 统一两种扫描路径
+- `app_controller.cpp` `handleKeySearch`：拦截 Tab → 切换 `searchUseRegex_`（不传递给 `handleCommonInputKeys`）
+- `app_controller.cpp` `handleKey`：ESC in None 模式且 `!searchKeyword_.empty()` → 清除搜索状态
+- `app_controller.cpp` `handleNavKeys` Tab：切换前先清除搜索状态（keyword / results / regex）
+- `app_controller.cpp` `buildRawPane`/`buildFilteredPane`：移除基于 searchLine 的 `highlighted` 附加条件；追踪 `maxContentLen`，`getViewData` 后 clamp `hScrollOffset` 到 `maxContentLen - 1`（0 行时跳过）
+- `app_controller.hpp`：`PaneState` 和 `ViewData` 新增 `searchActive`、`searchUseRegex` 字段；AppController 私有新增 `searchUseRegex_` 和 `std::optional<std::regex> searchRegex_`
 
 ---
 

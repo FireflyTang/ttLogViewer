@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ttLogViewer
-    VERSION 0.9.5
+    VERSION 0.9.6
     DESCRIPTION "A fast terminal log file viewer"
     LANGUAGES CXX
 )
