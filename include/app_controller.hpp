@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -92,6 +93,11 @@ struct ViewData {
     // ── Progress overlay ──────────────────────────────────────────────────────
     bool   showProgress = false;
     double progress     = 0.0;
+
+    // ── Search status ─────────────────────────────────────────────────────────
+    std::string searchKeyword;        // active search keyword; empty if none
+    size_t      searchResultCount = 0;
+    size_t      searchResultIndex = 0;  // 1-based current result position
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -138,6 +144,13 @@ public:
     // Switch the active focus to the given pane.
     void setFocus(FocusArea area);
 
+    // Show a Y/N quit confirmation dialog.  exitFn is called when the user
+    // confirms.  No-op if a dialog is already open.
+    void requestQuit(std::function<void()> exitFn);
+
+    // Returns true when a modal dialog (info or choice) is currently visible.
+    bool isDialogOpen() const;
+
 private:
     ILogReader&   reader_;
     IFilterChain& chain_;
@@ -180,8 +193,13 @@ private:
     bool   showProgress_ = false;
     double progress_     = 0.0;
 
+    // ── Reprocess timeout ─────────────────────────────────────────────────────
+    std::chrono::steady_clock::time_point reprocessStartTime_;
+    bool reprocessTimeoutShown_ = false;
+    static constexpr int kReprocessTimeoutSeconds = 30;
+
     // ── Phase 3 state ─────────────────────────────────────────────────────────
-    bool                       showLineNumbers_ = false;
+    bool                       showLineNumbers_ = true;
     std::unordered_set<size_t> foldedLines_;       // rawLineNo values that are folded
     int                        lastTerminalWidth_ = 80;
     std::string                exportPath_;        // Generated on 'w' press

@@ -64,6 +64,8 @@ public:
                    ProgressCallback onProgress,
                    DoneCallback     onDone) override;
 
+    void cancelReprocess() override;
+
     void reset() override;
 
     void save(std::string_view path) const override;

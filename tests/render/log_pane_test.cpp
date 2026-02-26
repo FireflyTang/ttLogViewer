@@ -119,7 +119,7 @@ TEST(LogPaneRender, NoFileOpenNoCrash) {
 
 // ── Phase 3: line number display ─────────────────────────────────────────────
 
-TEST(LogPaneRender, LineNumbersShownAfterLKey) {
+TEST(LogPaneRender, LineNumbersShownByDefault) {
     TempFile f("alpha\nbeta\n");
     LogReader reader;
     reader.open(f.path());
@@ -131,18 +131,15 @@ TEST(LogPaneRender, LineNumbersShownAfterLKey) {
     auto comp   = CreateMainComponent(ctrl, screen);
     ctrl.onTerminalResize(60, 20);
 
-    // Press 'l' to toggle line numbers on
-    ctrl.handleKey(Event::Character('l'));
-
     Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(20));
     Render(s, comp->Render());
     std::string out = s.ToString();
 
-    // Line 1 number should appear
+    // Line numbers are on by default — line 1 number should appear
     EXPECT_NE(out.find("1 "), std::string::npos);
 }
 
-TEST(LogPaneRender, LineNumbersHiddenByDefault) {
+TEST(LogPaneRender, LineNumbersHiddenAfterLKey) {
     TempFile f("alpha\nbeta\n");
     LogReader reader;
     reader.open(f.path());
@@ -154,13 +151,10 @@ TEST(LogPaneRender, LineNumbersHiddenByDefault) {
     auto comp   = CreateMainComponent(ctrl, screen);
     ctrl.onTerminalResize(60, 20);
 
-    Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(20));
-    Render(s, comp->Render());
-    std::string out = s.ToString();
+    // Press 'l' to toggle line numbers off (they are on by default)
+    ctrl.handleKey(Event::Character('l'));
 
-    // Line numbers should not appear as leading "1 " before content
-    // (The marker "▶ " is present but not a bare digit-space)
-    // We check ViewData directly instead
+    // showLineNumbers should now be false
     EXPECT_FALSE(ctrl.getViewData(5, 5).showLineNumbers);
 }
 

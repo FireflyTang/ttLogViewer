@@ -112,11 +112,12 @@ TEST_F(NavigationTest, GotoNotAvailableWhileIndexing) {
 // ── Phase 3: l / z / h keys ───────────────────────────────────────────────────
 
 TEST_F(NavigationTest, LKeyTogglesShowLineNumbers) {
-    EXPECT_FALSE(ctrl_.getViewData(5, 5).showLineNumbers);
-    key(ftxui::Event::Character('l'));
+    // Line numbers are ON by default; 'l' toggles the state.
     EXPECT_TRUE(ctrl_.getViewData(5, 5).showLineNumbers);
     key(ftxui::Event::Character('l'));
     EXPECT_FALSE(ctrl_.getViewData(5, 5).showLineNumbers);
+    key(ftxui::Event::Character('l'));
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).showLineNumbers);
 }
 
 TEST_F(NavigationTest, ZKeyFoldsHighlightedLine) {
@@ -214,4 +215,72 @@ TEST_F(NavigationTest, SetFocusRoundTrip) {
     ctrl_.setFocus(FocusArea::Filtered);
     ctrl_.setFocus(FocusArea::Raw);
     EXPECT_TRUE(ctrl_.getViewData(5, 5).rawFocused);
+}
+
+// ── Bug #3: raw pane must never show filter match colors ──────────────────────
+
+TEST_F(NavigationTest, RawPaneHasNoFilterColors) {
+    // Add a filter that matches "line" (every line in the fixture contains it).
+    // computeColors() works without reprocess, so no waiting needed.
+    chain_.append(FilterDef{"line", "#FF5555", true, false, false});
+
+    auto d = ctrl_.getViewData(5, 5);
+    for (const auto& ll : d.rawPane)
+        EXPECT_TRUE(ll.colors.empty()) << "raw pane line " << ll.rawLineNo
+                                       << " must not carry filter colors";
+}
+
+// ── Feature #2: quit confirmation dialog ─────────────────────────────────────
+
+TEST_F(NavigationTest, IsDialogOpenReturnsFalseInitially) {
+    EXPECT_FALSE(ctrl_.isDialogOpen());
+}
+
+TEST_F(NavigationTest, RequestQuitShowsDialog) {
+    bool called = false;
+    ctrl_.requestQuit([&called] { called = true; });
+    EXPECT_TRUE(ctrl_.isDialogOpen());
+    // The exit callback must NOT have been called yet (user hasn't confirmed)
+    EXPECT_FALSE(called);
+}
+
+TEST_F(NavigationTest, RequestQuitNoopIfDialogAlreadyOpen) {
+    // Open the help dialog first
+    key(ftxui::Event::Character('h'));
+    EXPECT_TRUE(ctrl_.isDialogOpen());
+    // requestQuit must not override the existing dialog
+    bool called = false;
+    ctrl_.requestQuit([&called] { called = true; });
+    auto d = ctrl_.getViewData(5, 5);
+    // Dialog is still the help dialog (not a choice dialog)
+    EXPECT_FALSE(d.dialogHasChoice);
+    EXPECT_FALSE(called);
+}
+
+// ── Feature #7: search keyword exposed in ViewData ───────────────────────────
+
+TEST_F(NavigationTest, SearchKeywordEmptyInitially) {
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+}
+
+TEST_F(NavigationTest, SearchKeywordSetAfterSearch) {
+    key(ftxui::Event::Character('/'));
+    type("line1");
+    key(ftxui::Event::Return);
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(d.searchKeyword, "line1");
+    EXPECT_GT(d.searchResultCount, 0u);
+    EXPECT_GE(d.searchResultIndex, 1u);
+}
+
+TEST_F(NavigationTest, SearchKeywordClearedOnEmptySearch) {
+    // First do a real search
+    key(ftxui::Event::Character('/'));
+    type("line1");
+    key(ftxui::Event::Return);
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+    // Now clear by searching with empty string
+    key(ftxui::Event::Character('/'));
+    key(ftxui::Event::Return);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
 }

@@ -72,6 +72,9 @@ public:
                            ProgressCallback onProgress,
                            DoneCallback     onDone) = 0;
 
+    // Cancel an in-progress reprocess (if any) and wait for the thread to exit.
+    virtual void cancelReprocess() = 0;
+
     virtual void reset() = 0;
 
     virtual void save(std::string_view path) const = 0;

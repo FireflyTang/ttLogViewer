@@ -27,6 +27,7 @@ public:
     MOCK_METHOD(void, reprocess,
                 (size_t fromFilter, ProgressCallback onProgress, DoneCallback onDone),
                 (override));
+    MOCK_METHOD(void, cancelReprocess, (), (override));
     MOCK_METHOD(void, reset, (), (override));
     MOCK_METHOD(void, save,  (std::string_view path), (const, override));
     MOCK_METHOD(bool, load,  (std::string_view path), (override));

@@ -75,28 +75,51 @@ Element renderColoredLine(std::string_view content,
         return renderColoredLine(content, shifted, shiftedSS, folded, terminalWidth, 0);
     }
 
-    // Folded mode: truncate content and append "…" (no spans applied)
-    if (folded && terminalWidth > 2) {
-        size_t maxBytes = static_cast<size_t>(terminalWidth - 2);
-        std::string_view truncated = truncateUtf8(content, maxBytes);
-        return hbox({ text(std::string(truncated)), text("…") | dim });
+    // Clip content to terminal width (UTF-8 safe) so that rendering stays within
+    // the visible area regardless of FTXUI's clipping behaviour.
+    // For folded mode, reserve 1 column for the "…" indicator.
+    // Make local mutable copies of spans so we can clip them.
+    std::vector<ColorSpan>  clippedSpans(spans);
+    std::vector<SearchSpan> clippedSearchSpans(searchSpans);
+
+    if (terminalWidth > 0) {
+        size_t avail = (folded && terminalWidth > 1)
+                       ? static_cast<size_t>(terminalWidth - 1)
+                       : static_cast<size_t>(terminalWidth);
+        content = truncateUtf8(content, avail);
+        // Drop spans that start at or beyond the new content size; clip span ends.
+        const size_t sz = content.size();
+        auto clipVec = [sz](auto& vec) {
+            vec.erase(std::remove_if(vec.begin(), vec.end(),
+                [sz](const auto& s) { return s.start >= sz; }), vec.end());
+            for (auto& s : vec) s.end = std::min(s.end, sz);
+        };
+        clipVec(clippedSpans);
+        clipVec(clippedSearchSpans);
     }
 
+    // Handle empty content after clipping.
+    if (content.empty())
+        return folded ? Element(text("…") | dim) : text("");
+
     // Fast path: no spans at all
-    if (spans.empty() && searchSpans.empty())
+    if (clippedSpans.empty() && clippedSearchSpans.empty()) {
+        if (folded && terminalWidth > 1)
+            return hbox({ text(std::string(content)), text("…") | dim });
         return text(std::string(content));
+    }
 
     // Collect all boundary points from both span types, then render each segment
     // with the appropriate color / bold+underlined decorators.
     std::vector<size_t> pts;
-    pts.reserve(2 + spans.size() * 2 + searchSpans.size() * 2);
+    pts.reserve(2 + clippedSpans.size() * 2 + clippedSearchSpans.size() * 2);
     pts.push_back(0);
     pts.push_back(content.size());
-    for (const auto& s : spans) {
+    for (const auto& s : clippedSpans) {
         pts.push_back(s.start);
         pts.push_back(s.end);
     }
-    for (const auto& s : searchSpans) {
+    for (const auto& s : clippedSearchSpans) {
         pts.push_back(s.start);
         pts.push_back(s.end);
     }
@@ -112,12 +135,12 @@ Element renderColoredLine(std::string_view content,
 
         // Determine color from the first covering ColorSpan
         std::string_view col;
-        for (const auto& s : spans)
+        for (const auto& s : clippedSpans)
             if (s.start <= a && b <= s.end) { col = s.color; break; }
 
         // Determine whether to apply bold+underlined from SearchSpan
         bool isMatch = false;
-        for (const auto& s : searchSpans)
+        for (const auto& s : clippedSearchSpans)
             if (s.start <= a && b <= s.end) { isMatch = true; break; }
 
         Element e = text(std::string(content.substr(a, len)));
@@ -128,6 +151,10 @@ Element renderColoredLine(std::string_view content,
 
     if (parts.empty())
         return text(std::string(content));
+
+    // Append "…" indicator for folded lines
+    if (folded && terminalWidth > 1)
+        parts.push_back(text("…") | dim);
 
     return hbox(std::move(parts));
 }

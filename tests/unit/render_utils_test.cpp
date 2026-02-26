@@ -208,3 +208,65 @@ TEST(RenderColoredLine, HOffsetDropsSpanBeforeOffset) {
     std::string s = renderLine(e, 20);
     EXPECT_NE(s.find("world"), std::string::npos);
 }
+
+// ── Folded mode with color spans (#4 fix) ─────────────────────────────────────
+
+TEST(RenderColoredLine, FoldedLinePreservesColorSpan) {
+    // "hello world" folded to width 8 (7 chars content + "…").
+    // ColorSpan covers "hello" (bytes 0-5). After truncation to 7 bytes the
+    // span is still within content, so the colored text must still render.
+    std::vector<ColorSpan> cs = {{ 0, 5, "#FF5555" }};
+    auto e = renderColoredLine("hello world", cs, {}, /*folded=*/true, 8, 0);
+    std::string s = renderLine(e, 10);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    // "…" indicator must be present
+    // The UTF-8 "…" is 3 bytes; we just check it didn't vanish entirely
+    EXPECT_NE(s.find("\xe2\x80\xa6"), std::string::npos);  // "…" in UTF-8
+}
+
+TEST(RenderColoredLine, FoldedLineDropsSpanBeyondTruncation) {
+    // Span covers "world" (bytes 6-11). With terminalWidth=7 (6 content + "…")
+    // content is truncated to "hello " (6 bytes) and the span is dropped.
+    // Rendering must not crash.
+    std::vector<ColorSpan> cs = {{ 6, 11, "#55FF55" }};
+    auto e = renderColoredLine("hello world", cs, {}, /*folded=*/true, 7, 0);
+    EXPECT_NO_THROW(renderLine(e, 10));
+}
+
+TEST(RenderColoredLine, FoldedSearchSpanPreserved) {
+    // SearchSpan covers "hello" (bytes 0-5), folded to width 9.
+    // The search span must still apply (bold+underlined) on the visible part.
+    std::vector<SearchSpan> ss = {{ 0, 5 }};
+    auto e = renderColoredLine("hello world", {}, ss, /*folded=*/true, 9, 0);
+    std::string s = renderLine(e, 12);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+}
+
+// ── Narrow window clipping (#4 fix) ───────────────────────────────────────────
+
+TEST(RenderColoredLine, NarrowWindowClipsContent) {
+    // terminalWidth=5, content is 11 chars. Only first 5 chars should appear.
+    auto e = renderColoredLine("hello world", {}, {}, false, 5, 0);
+    std::string s = renderLine(e, 10);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_EQ(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, NarrowWindowClipsColorSpan) {
+    // ColorSpan covers "world" (bytes 6-11); terminal is only 6 wide.
+    // The span starts beyond the clipped content (6 chars = "hello ") so it
+    // must be dropped — no crash expected.
+    std::vector<ColorSpan> cs = {{ 6, 11, "#FF5555" }};
+    auto e = renderColoredLine("hello world", cs, {}, false, 6, 0);
+    std::string s = renderLine(e, 10);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_EQ(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, NarrowWindowPartialColorSpan) {
+    // ColorSpan covers bytes 3-11 ("lo world"); terminal width = 6.
+    // After clipping to "hello " (6 bytes), span [3,6] is still valid → "lo " colored.
+    std::vector<ColorSpan> cs = {{ 3, 11, "#FF5555" }};
+    auto e = renderColoredLine("hello world", cs, {}, false, 6, 0);
+    EXPECT_NO_THROW(renderLine(e, 10));
+}

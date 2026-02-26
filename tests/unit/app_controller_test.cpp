@@ -271,11 +271,12 @@ TEST_F(AppControllerTest, MultipleInputModeSwitchesNoBleed) {
 // ── Phase 3: l / z / h key handlers ──────────────────────────────────────────
 
 TEST_F(AppControllerTest, LKeyTogglesLineNumbers) {
-    EXPECT_FALSE(data().showLineNumbers);
-    key(Event::Character('l'));
+    // Line numbers are ON by default; 'l' toggles the state.
     EXPECT_TRUE(data().showLineNumbers);
     key(Event::Character('l'));
     EXPECT_FALSE(data().showLineNumbers);
+    key(Event::Character('l'));
+    EXPECT_TRUE(data().showLineNumbers);
 }
 
 TEST_F(AppControllerTest, ZKeyFoldsCurrentLine) {

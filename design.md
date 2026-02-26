@@ -145,7 +145,7 @@
 
 - **链式过滤**：有序处理，每个过滤器的输出作为下一个的输入
 - **颜色叠加**：后续过滤器的颜色标记可覆盖前面过滤器的颜色
-- **全量预处理**：过滤器链变更时对整个日志文件进行完整过滤，显示进度条，完成后才可查看
+- **全量预处理**：过滤器链变更时对整个日志文件进行完整过滤，显示进度条，完成后才可查看；超过 30 秒时弹 Y/N 确认（Y=继续等待，N=取消过滤）
 - **行号缓存**：每个过滤器只缓存匹配的行号列表，颜色信息动态计算以节省内存
 - **正则预编译**：过滤器配置时编译正则，不在匹配时重复编译
 - **并行过滤**：每个过滤器内部将行分段，线程池并行处理后合并
@@ -279,7 +279,7 @@
 | `z` | 切换当前高亮行的折叠/展开（超长行） |
 | `←` / `→` | 当前窗格水平滚动（每次 4 字节，UTF-8 边界对齐） |
 | `h` | 显示所有快捷键帮助（弹窗，任意键关闭） |
-| `q` | 退出 |
+| `q` | 退出（弹窗 Y/N 确认） |
 
 ### 新增过滤器输入流程
 
@@ -297,10 +297,12 @@
 
 ### 其他显示功能
 
-- **折叠超长行**：超长行截断显示，按 `z` 切换当前高亮行的折叠/展开
+- **折叠超长行**：超长行截断显示，按 `z` 切换当前高亮行的折叠/展开；折叠行末尾显示 `…` 并保留颜色高亮
 - **水平滚动**：`←`/`→` 键平移当前窗格的水平偏移，每次 4 字节（UTF-8 边界对齐），两窗格独立滚动
 - **鼠标支持**：滚轮在悬停窗格内滚动（±3 行/次），单击切换焦点，不需要另一窗格跟随
-- **行号显示**：按 `l` 切换显示/隐藏原始文件行号
+- **行号显示**：默认开启，按 `l` 切换显示/隐藏原始文件行号
+- **过滤栏颜色指示**：每个过滤器标签后显示颜色圆点：`●`（启用，使用过滤器颜色）或 `○`（禁用，灰色）
+- **搜索关键词提示**：搜索词激活时，底部输入行（`None` 模式）显示 `/keyword  (N/M)  n/N:跳转  Esc:清除`，无匹配时显示 `无结果`
 
 ---
 
@@ -412,6 +414,9 @@ public:
     // 后台线程计算，atomic swap 结果，PostEvent 通知刷新，期间保持显示旧数据
     void reprocess(size_t fromFilter, ProgressCallback onProgress, DoneCallback onDone);
 
+    // 取消正在进行的 reprocess，等待线程退出
+    void cancelReprocess();
+
     void reset();
 
     void save(std::string_view path) const;
@@ -463,12 +468,14 @@ struct ViewData {
 
     // 过滤器栏
     struct FilterTag {
-        int         number;    // 1-based 显示编号
+        int         number;     // 1-based 显示编号
         std::string pattern;
         std::string color;
         bool        enabled;
         bool        exclude;
         bool        selected;
+        bool        useRegex;   // true=正则模式，false=字符串模式
+        size_t      matchCount; // 经本过滤器处理后存活的行数
     };
     std::vector<FilterTag> filterTags;
 
@@ -477,6 +484,11 @@ struct ViewData {
     std::string inputPrompt;   // "Pattern> " / "Goto: " 等
     std::string inputBuffer;
     bool        inputValid;    // 正则信号灯
+
+    // 搜索状态（inputMode=None 时底部显示用）
+    std::string searchKeyword;        // 当前搜索词，空串=无激活搜索
+    size_t      searchResultCount;    // 搜索结果总数
+    size_t      searchResultIndex;    // 当前位置（1-based）
 
     // 弹窗
     bool        showDialog;

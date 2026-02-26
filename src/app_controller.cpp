@@ -652,7 +652,7 @@ void AppController::buildRawPane(ViewData& data) {
         LogLine ll;
         ll.rawLineNo   = lineNo;
         ll.content     = reader_.getLine(lineNo);
-        ll.colors      = chain_.computeColors(lineNo, ll.content);
+        ll.colors      = {};   // raw pane does not show filter match colors
         ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_);
         ll.highlighted = (first + i == rawState_.cursor) || (lineNo == searchLine);
         ll.folded      = (foldedLines_.count(lineNo) > 0);
@@ -721,6 +721,10 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.progress        = progress_;
     data.showLineNumbers = showLineNumbers_;
     data.terminalWidth   = lastTerminalWidth_;
+
+    data.searchKeyword     = searchKeyword_;
+    data.searchResultCount = searchResults_.size();
+    data.searchResultIndex = searchResults_.empty() ? 0 : searchIndex_ + 1;
 
     buildRawPane(data);
     buildFilteredPane(data);
@@ -850,20 +854,56 @@ const char* AppController::nextPaletteColor(size_t idx) {
 }
 
 void AppController::triggerReprocess(size_t fromFilter) {
-    showProgress_ = true;
-    progress_     = 0.0;
+    showProgress_          = true;
+    progress_              = 0.0;
+    reprocessStartTime_    = std::chrono::steady_clock::now();
+    reprocessTimeoutShown_ = false;
 
     // The onProgress / onDone callbacks are invoked from FilterChain's postFn
     // context, which is already the UI thread. No additional wrapping needed.
     chain_.reprocess(fromFilter,
         [this](double p) {
             progress_ = p;
+            // Show a one-time confirmation dialog if filtering takes too long.
+            if (!reprocessTimeoutShown_ && !showDialog_) {
+                using namespace std::chrono;
+                auto elapsed = duration_cast<seconds>(
+                    steady_clock::now() - reprocessStartTime_).count();
+                if (elapsed >= kReprocessTimeoutSeconds) {
+                    reprocessTimeoutShown_ = true;
+                    showDialog_      = true;
+                    dialogTitle_     = "过滤耗时较长";
+                    dialogBody_      = "过滤已进行超过30秒，是否继续等待？";
+                    dialogHasChoice_ = true;
+                    dialogYesAction_ = [this] { closeDialog(); };
+                    dialogNoAction_  = [this] {
+                        chain_.cancelReprocess();
+                        showProgress_          = false;
+                        progress_              = 0.0;
+                        reprocessTimeoutShown_ = false;
+                        closeDialog();
+                    };
+                }
+            }
         },
         [this]() {
-            showProgress_ = false;
-            progress_     = 1.0;
+            showProgress_          = false;
+            progress_              = 1.0;
+            reprocessTimeoutShown_ = false;
         });
 }
+
+void AppController::requestQuit(std::function<void()> exitFn) {
+    if (showDialog_) return;   // another dialog already open, ignore
+    showDialog_      = true;
+    dialogTitle_     = "退出确认";
+    dialogBody_      = "确认退出 ttLogViewer？";
+    dialogHasChoice_ = true;
+    dialogYesAction_ = std::move(exitFn);
+    dialogNoAction_  = [this] { closeDialog(); };
+}
+
+bool AppController::isDialogOpen() const { return showDialog_; }
 
 void AppController::showErrorDialog(std::string title, std::string body) {
     showDialog_      = true;

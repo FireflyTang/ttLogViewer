@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.3（鼠标支持 + 水平滚动）
-> 测试：259 个，全部通过
+> 版本：v0.9.4（Bug 修复 + UX 改进）
+> 测试：272 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -170,6 +170,7 @@ struct FilterNode {
 **cancelFlag_ 取消机制**：
 - 新 reprocess 开始时 `cancelFlag_.store(true)`，join 等待旧线程退出，然后 `cancelFlag_.store(false)` 再启动新线程。
 - `buildStage()` 每处理一定行数检查 `cancel.load()`，提前返回。
+- **v0.9.4 新增** `cancelReprocess()`：对外暴露显式取消接口（`IFilterChain` 纯虚方法）。实现：`cancelFlag_.store(true)` → join → `isReprocessing_=false`。用于过滤超时对话框选"否"时中止重处理。
 
 **持久化**：
 - `save(path)` 和 `save(path, lastFile, mode)` 两个重载，共用 `buildFiltersJson()` 内部函数（返回 `nlohmann::json` array）。
@@ -235,6 +236,15 @@ struct PaneState {
   - `Left + Pressed`：调用 `setFocus` 切换到点击窗格
 - 布局行号（0-based）：status(0) + sep(1) + rawPane(2..1+rawH) + sep(2+rawH) + filtPane(3+rawH..2+rawH+filtH)
 
+**v0.9.4 变更**：
+- **原始窗格不染色**：`buildRawPane()` 将 `ll.colors` 设为空（不调用 `chain_.computeColors()`）；过滤颜色仅属于过滤窗格，原始窗格的搜索高亮（searchSpans）不受影响
+- **行号默认开启**：`showLineNumbers_` 初始值改为 `true`
+- **新增公有方法**：
+  - `requestQuit(std::function<void()> exitFn)`：弹 Y/N 退出确认框；若另一对话框已开则静默忽略（防嵌套）
+  - `isDialogOpen() const`：render.cpp 用于在弹窗期间屏蔽 `q` 键再次触发
+- **ViewData 新增搜索字段**：`searchKeyword`（当前关键词）、`searchResultCount`（结果总数）、`searchResultIndex`（1-based 当前位置）；由 `getViewData()` 填充
+- **过滤超时**：`triggerReprocess()` 在进度回调中检测已耗时 ≥ 30 秒（`kReprocessTimeoutSeconds`），首次触发时弹 Y/N 确认（Y = 继续等待，N = 调用 `chain_.cancelReprocess()` 中止）；字段 `reprocessStartTime_` 和 `reprocessTimeoutShown_` 追踪超时状态
+
 ### 3.5 渲染层
 
 **职责**：纯 FTXUI 渲染，将 `ViewData` 转换为 FTXUI `Element` 树，无业务状态。
@@ -259,6 +269,12 @@ CreateMainComponent(controller, screen)
 - UTF-8 安全：按字节扫描，`0x80`~`0xBF` 是续字节跳过，多字节序列整体处理
 - ColorSpan 按字符（不是字节）位置计数，`computeColors()` 在 FilterChain 侧保证
 - SearchSpan（v0.9.2 新增）：`{size_t start; size_t end;}` 字节区间，渲染为 **bold + underlined**，与过滤颜色叠加，两类 span 通过边界点合并算法同时处理
+- **v0.9.4 重构**：统一截断路径——当 `terminalWidth > 0` 时，先用 `truncateUtf8()` 将 content 裁剪到可用宽度（折叠模式预留 1 列给 "…"），同步裁剪两类 span；折叠 early-return 分支删除，改为在段落构建完成后追加 `text("…") | dim`。修复了折叠行颜色全丢和窄窗口颜色截断两类问题
+
+**v0.9.4 渲染层变更**（render.cpp）：
+- `renderFilterBar`：每个过滤器标签后追加颜色指示圆点：`● ` + 过滤器颜色（启用），或 `○ ` + dim（禁用）
+- `renderInputLine` None 分支：当 `data.searchKeyword` 非空时，底部显示 `/keyword  (N/M)  n/N:跳转  Esc:清除`
+- `CatchEvent` q 键：改为调用 `controller.requestQuit(screen.ExitLoopClosure())`，并增加 `!controller.isDialogOpen()` 保护
 
 ---
 

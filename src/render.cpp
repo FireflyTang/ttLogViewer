@@ -114,7 +114,11 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element e = text(std::move(label));
         if (tag.selected)  e = e | inverted;
         if (!tag.enabled)  e = e | dim;
-        items.push_back(e);
+        // Colored dot indicator: ● in filter color (enabled) or ○ dim (disabled)
+        Element dot = tag.enabled
+            ? Element(text("● ") | color(parseHexColor(tag.color)))
+            : Element(text("○ ") | dim);
+        items.push_back(hbox({ std::move(e), std::move(dot) }));
     }
     return hbox(std::move(items));
 }
@@ -122,6 +126,14 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
 static Element renderInputLine(const ViewData& data) {
     switch (data.inputMode) {
         case InputMode::None:
+            if (!data.searchKeyword.empty()) {
+                std::string cnt = (data.searchResultCount > 0)
+                    ? std::format("{}/{}", data.searchResultIndex, data.searchResultCount)
+                    : "无结果";
+                return hbox({ text(" /") | dim,
+                              text(data.searchKeyword) | bold,
+                              text("  (" + cnt + ")  n/N:跳转  Esc:清除") | dim });
+            }
             return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
 
         case InputMode::Search:
@@ -221,9 +233,11 @@ Component CreateMainComponent(AppController& controller,
     // Intercept events before passing to AppController.
     // On each event, refresh the pane heights in case the terminal was resized.
     return CatchEvent(renderer, [&](Event event) {
-        // Quit on 'q' when no text input is active
-        if (event == Event::Character('q') && !controller.isInputActive()) {
-            screen.ExitLoopClosure()();
+        // Quit on 'q' when no text input is active and no dialog is open
+        if (event == Event::Character('q')
+                && !controller.isInputActive()
+                && !controller.isDialogOpen()) {
+            controller.requestQuit(screen.ExitLoopClosure());
             return true;
         }
         // Update heights on every event to pick up terminal resize

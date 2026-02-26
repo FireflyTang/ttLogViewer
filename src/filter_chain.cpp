@@ -383,6 +383,13 @@ void FilterChain::reprocess(size_t fromFilter,
 
 // ── Persistence ────────────────────────────────────────────────────────────────
 
+void FilterChain::cancelReprocess() {
+    cancelFlag_.store(true);
+    if (reprocessThread_.joinable())
+        reprocessThread_.join();
+    isReprocessing_ = false;
+}
+
 void FilterChain::reset() {
     for (auto& f : filters_)
         f.output.clear();
