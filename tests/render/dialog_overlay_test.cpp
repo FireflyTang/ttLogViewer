@@ -8,8 +8,8 @@ TEST_F(DialogOverlayTest, NoDialogByDefault) {
 }
 
 // Sequence to trigger the "无效正则" dialog:
-// Add "ERROR" as a string filter, toggle to regex mode ('x'),
-// edit it with an invalid regex "[invalid", then press Return.
+// Add "ERROR" as a string filter, enter edit mode, toggle to regex via Tab,
+// replace the pattern with "[invalid", then press Return.
 // Must be inlined in each test (protected base members not accessible from free fns).
 
 TEST_F(DialogOverlayTest, InvalidRegexShowsDialog) {
@@ -18,8 +18,8 @@ TEST_F(DialogOverlayTest, InvalidRegexShowsDialog) {
     for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
     key(E::Return);
     chain_.waitReprocess();
-    key(E::Character('x'));   // Toggle to regex mode
-    key(E::Character('e'));   // Enter FilterEdit
+    key(E::Character('e'));   // Enter FilterEdit (buffer pre-filled with "ERROR")
+    key(E::Tab);              // Toggle to regex mode
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);           // Triggers "无效正则" dialog
@@ -35,8 +35,8 @@ TEST_F(DialogOverlayTest, AnyKeyClosesInfoDialog) {
     for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
     key(E::Return);
     chain_.waitReprocess();
-    key(E::Character('x'));
-    key(E::Character('e'));
+    key(E::Character('e'));   // Enter FilterEdit
+    key(E::Tab);              // Toggle to regex mode
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);
@@ -52,8 +52,8 @@ TEST_F(DialogOverlayTest, DialogTitleBodyRendered) {
     for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
     key(E::Return);
     chain_.waitReprocess();
-    key(E::Character('x'));
-    key(E::Character('e'));
+    key(E::Character('e'));   // Enter FilterEdit
+    key(E::Tab);              // Toggle to regex mode
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);

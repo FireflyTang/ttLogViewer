@@ -30,13 +30,13 @@ static constexpr std::string_view kHelpText =
     "[/]: 选择过滤器\n"
     "+/-: 调整过滤器顺序\n"
     "Space: 启停过滤器\n"
-    "x: 切换正则/字符串匹配模式\n"
+    "a/e: 添加/编辑过滤器 (输入时 Tab 切换正则)\n"
     "/: 搜索 (输入时 Tab 切换正则/字符串)\n"
     "n/p: 下/上一搜索结果  Esc:清除搜索\n"
     "g: 跳转行号\n"
     "G: 跟随末尾\n"
     "o: 打开文件\n"
-    "s/r: 静态/实时模式\n"
+    "s: 切换静态/实时模式\n"
     "f: 强制检查\n"
     "l: 行号显示切换\n"
     "z: 折叠/展开超长行\n"
@@ -287,14 +287,6 @@ bool AppController::handleFilterKeys(const Event& event) {
         }
         return true;
     }
-    if (event == Event::Character('x')) {
-        if (chain_.filterCount() > 0) {
-            clampSelectedFilter();
-            chain_.toggleUseRegex(selectedFilter_);
-            triggerReprocess(selectedFilter_);
-        }
-        return true;
-    }
     return false;
 }
 
@@ -337,21 +329,19 @@ bool AppController::handleModeKeys(const Event& event) {
         return true;
     }
     if (event == Event::Character('s')) {
-        reader_.setMode(FileMode::Static);
-        followTail_ = false;
-        return true;
-    }
-    if (event == Event::Character('r')) {
-        reader_.setMode(FileMode::Realtime);
+        // Toggle between static and realtime mode.
+        if (reader_.mode() == FileMode::Static) {
+            reader_.setMode(FileMode::Realtime);
+        } else {
+            reader_.setMode(FileMode::Static);
+            followTail_ = false;
+        }
         return true;
     }
     if (event == Event::Character('f')) {
         reader_.forceCheck();
         return true;
     }
-
-    // ── Phase 3 keys ──────────────────────────────────────────────────────────
-
     if (event == Event::Character('l')) {
         showLineNumbers_ = !showLineNumbers_;
         return true;
@@ -410,8 +400,9 @@ bool AppController::handleKeyFilterInput(const Event& event) {
         }
         if (inputMode_ == InputMode::FilterAdd) {
             FilterDef def;
-            def.pattern = inputBuffer_;
-            def.color   = nextPaletteColor(colorPaletteIdx_);
+            def.pattern  = inputBuffer_;
+            def.color    = nextPaletteColor(colorPaletteIdx_);
+            def.useRegex = filterInputUseRegex_;
             chain_.append(std::move(def));
             selectedFilter_ = chain_.filterCount() - 1;
             triggerReprocess(selectedFilter_);
@@ -419,7 +410,8 @@ bool AppController::handleKeyFilterInput(const Event& event) {
             // Validate selectedFilter_ before access (defensive)
             if (selectedFilter_ < chain_.filterCount()) {
                 FilterDef def = chain_.filterAt(selectedFilter_);
-                def.pattern = inputBuffer_;
+                def.pattern  = inputBuffer_;
+                def.useRegex = filterInputUseRegex_;
                 chain_.edit(selectedFilter_, std::move(def));
                 triggerReprocess(selectedFilter_);
             }
@@ -428,9 +420,10 @@ bool AppController::handleKeyFilterInput(const Event& event) {
         return true;
     }
 
-    // Tab: cycle color palette (FilterAdd only)
-    if (event == Event::Tab && inputMode_ == InputMode::FilterAdd) {
-        colorPaletteIdx_ = (colorPaletteIdx_ + 1) % kDefaultColorPaletteSize;
+    // Tab: toggle regex/string mode (both FilterAdd and FilterEdit)
+    if (event == Event::Tab) {
+        filterInputUseRegex_ = !filterInputUseRegex_;
+        validateInputRegex();
         return true;
     }
 
@@ -458,6 +451,7 @@ bool AppController::handleKeySearch(const Event& event) {
     // Tab: toggle regex / literal search mode
     if (event == Event::Tab) {
         searchUseRegex_ = !searchUseRegex_;
+        validateInputRegex();
         return true;
     }
 
@@ -745,6 +739,8 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.inputPrompt     = inputPrompt_;
     data.inputBuffer     = inputBuffer_;
     data.inputValid      = inputValid_;
+    data.inputUseRegex   = (inputMode_ == InputMode::Search) ? searchUseRegex_
+                                                              : filterInputUseRegex_;
 
     data.showDialog      = showDialog_;
     data.dialogTitle     = dialogTitle_;
@@ -808,6 +804,11 @@ void AppController::enterInputMode(InputMode mode, std::string prompt,
     inputMode_   = mode;
     inputPrompt_ = std::move(prompt);
     inputBuffer_ = std::move(prefill);
+    // Initialize local regex toggle from filter state (FilterEdit) or default false (others).
+    filterInputUseRegex_ = (mode == InputMode::FilterEdit
+                             && selectedFilter_ < chain_.filterCount())
+                           ? chain_.filterAt(selectedFilter_).useRegex
+                           : false;
     inputValid_  = (mode == InputMode::FilterEdit && !inputBuffer_.empty());
     if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit)
         validateInputRegex();
@@ -823,12 +824,12 @@ void AppController::exitInputMode() {
 void AppController::validateInputRegex() {
     if (inputBuffer_.empty()) { inputValid_ = false; return; }
 
-    // Determine whether the current filter uses regex mode.
-    // FilterAdd: new filters always start as string mode (useRegex=false).
-    // FilterEdit: inherit the filter's current mode.
+    // Determine regex mode from the local state of the active input.
     bool useRegex = false;
-    if (inputMode_ == InputMode::FilterEdit && selectedFilter_ < chain_.filterCount())
-        useRegex = chain_.filterAt(selectedFilter_).useRegex;
+    if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit)
+        useRegex = filterInputUseRegex_;
+    else if (inputMode_ == InputMode::Search)
+        useRegex = searchUseRegex_;
 
     if (!useRegex) {
         inputValid_ = true;  // Any non-empty literal string is valid
@@ -861,8 +862,9 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
     // Handle character input if allowed
     if (allowCharacters && event.is_character()) {
         inputBuffer_ += event.character();
-        // Validate regex if in filter input mode
-        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit) {
+        // Validate for filter and search input modes
+        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
+                || inputMode_ == InputMode::Search) {
             validateInputRegex();
         }
         return true;
@@ -874,8 +876,9 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
 bool AppController::handleInputBackspace() {
     if (!inputBuffer_.empty()) {
         inputBuffer_.pop_back();
-        // Validate regex if in filter input mode
-        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit) {
+        // Validate for filter and search input modes
+        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
+                || inputMode_ == InputMode::Search) {
             validateInputRegex();
         }
         return true;

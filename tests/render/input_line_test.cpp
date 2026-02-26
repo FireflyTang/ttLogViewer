@@ -9,7 +9,19 @@ TEST_F(InputLineTest, DefaultModeShowsHints) {
 
 TEST_F(InputLineTest, FilterAddShowsPrompt) {
     key(ftxui::Event::Character('a'));
-    EXPECT_NE(renderCtrl().find("Pattern>"), std::string::npos);
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("Pattern>"), std::string::npos);
+    // Filter input now shows [字符串] mode tag by default
+    EXPECT_NE(out.find("\xe5\xad\x97\xe7\xac\xa6\xe4\xb8\xb2"), std::string::npos)
+        << "Expected '字符串' mode tag in filter add input line";
+}
+
+TEST_F(InputLineTest, FilterAddTabShowsRegexTag) {
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);  // toggle to regex mode
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("\xe6\xad\xa3\xe5\x88\x99"), std::string::npos)
+        << "Expected '正则' mode tag after Tab in filter add";
 }
 
 TEST_F(InputLineTest, FilterAddTypingAppearsInBuffer) {

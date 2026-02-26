@@ -81,10 +81,11 @@ struct ViewData {
     std::vector<FilterTag> filterTags;
 
     // ── Input line ────────────────────────────────────────────────────────────
-    InputMode   inputMode   = InputMode::None;
+    InputMode   inputMode     = InputMode::None;
     std::string inputPrompt;
     std::string inputBuffer;
-    bool        inputValid  = false;
+    bool        inputValid    = false;
+    bool        inputUseRegex = false;  // regex mode for the active input (filter or search)
 
     // ── Dialog overlay ────────────────────────────────────────────────────────
     bool        showDialog      = false;
@@ -166,14 +167,15 @@ private:
     FocusArea  focus_     = FocusArea::Raw;
 
     // ── Input state ───────────────────────────────────────────────────────────
-    InputMode   inputMode_   = InputMode::None;
+    InputMode   inputMode_          = InputMode::None;
     std::string inputBuffer_;
     std::string inputPrompt_;
-    bool        inputValid_  = false;
+    bool        inputValid_         = false;
+    bool        filterInputUseRegex_ = false;  // local regex mode during filter add/edit
 
     // ── Filter selection ──────────────────────────────────────────────────────
     size_t selectedFilter_  = 0;
-    size_t colorPaletteIdx_ = 0;    // Cycles through palette on Tab in FilterAdd
+    size_t colorPaletteIdx_ = 0;    // Cycles through palette on 'x' in FilterAdd
 
     // ── Search state ──────────────────────────────────────────────────────────
     std::vector<size_t>       searchResults_;       // 1-based raw line numbers

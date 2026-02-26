@@ -156,18 +156,25 @@ static Element renderInputLine(const ViewData& data) {
             return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
 
         case InputMode::Search: {
-            std::string modeTag = data.searchUseRegex ? " [正则] " : " [字符串] ";
+            std::string modeTag = data.inputUseRegex ? " [正则]" : " [字符串]";
+            Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
             return hbox({ text(modeTag) | dim,
+                          text("  "),
                           text(data.inputBuffer) | bold,
-                          text("_"),
-                          text("  Tab:切换") | dim });
+                          std::move(dot),
+                          text("  Tab:正则") | dim });
         }
 
         case InputMode::FilterAdd:
         case InputMode::FilterEdit: {
-            Element light = text(data.inputValid ? " ●" : " ●")
-                          | color(data.inputValid ? Color::Green : Color::Red);
-            return hbox({ text(data.inputPrompt), text(data.inputBuffer) | bold, light });
+            std::string modeTag = data.inputUseRegex ? " [正则]" : " [字符串]";
+            Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
+            return hbox({ text(modeTag) | dim,
+                          text("  "),
+                          text(data.inputPrompt),
+                          text(data.inputBuffer) | bold,
+                          std::move(dot),
+                          text("  Tab:正则") | dim });
         }
 
         case InputMode::GotoLine:

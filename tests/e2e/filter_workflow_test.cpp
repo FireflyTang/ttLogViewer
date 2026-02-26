@@ -75,14 +75,17 @@ TEST_F(FilterWorkflowTest, EscCancelsFilterAdd) {
     EXPECT_EQ(chain_.filterCount(), 0u);  // Not added
 }
 
-TEST_F(FilterWorkflowTest, InvalidRegexNotAdded) {
-    // New filters start in string mode (useRegex=false).
-    // After adding as string, toggle to regex mode; the pattern "[invalid" fails
-    // regex compile and the toggle reverts (useRegex stays false).
+TEST_F(FilterWorkflowTest, InvalidRegexShowsDialogOnEdit) {
+    // Adding "[invalid" as a string filter is accepted.
+    // Trying to switch it to regex mode during edit and confirm shows an error dialog.
     addFilter("[invalid");  // Accepted as literal string
     EXPECT_EQ(chain_.filterCount(), 1u);
-    // Toggle to regex mode — should revert because "[invalid" is not a valid regex
-    key(ftxui::Event::Character('x'));
+    key(ftxui::Event::Character('e'));   // Enter edit mode (buffer pre-filled with "[invalid")
+    key(ftxui::Event::Tab);              // Toggle to regex mode — pattern is invalid
+    key(ftxui::Event::Return);           // Try to confirm — should show error dialog
+    EXPECT_TRUE(data().showDialog);
+    // Close dialog; filter's useRegex must still be false (edit was not committed)
+    key(ftxui::Event::Character('q'));
     EXPECT_FALSE(chain_.filterAt(0).useRegex);
 }
 
@@ -174,22 +177,28 @@ TEST_F(FilterWorkflowTest, EditEscKeepsOriginal) {
     EXPECT_EQ(chain_.filterAt(0).pattern, "ERROR");
 }
 
-// ── x key: toggle regex/string mode ──────────────────────────────────────────
+// ── Tab during edit: toggle regex/string mode ─────────────────────────────────
 
-TEST_F(FilterWorkflowTest, XKeyTogglesUseRegex) {
+TEST_F(FilterWorkflowTest, TabDuringEditTogglesUseRegex) {
     addFilter("ERROR");
-    bool before = data().filterTags[0].useRegex;
-    key(ftxui::Event::Character('x'));
-    bool after = data().filterTags[0].useRegex;
-    EXPECT_NE(before, after);
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);  // default: string mode
+    key(ftxui::Event::Character('e'));           // enter edit mode
+    key(ftxui::Event::Tab);                      // toggle to regex mode
+    key(ftxui::Event::Return);                   // commit
+    chain_.waitReprocess();
+    EXPECT_TRUE(chain_.filterAt(0).useRegex);
 }
 
-TEST_F(FilterWorkflowTest, XKeyRevertsBadRegex) {
-    // "[bad" can't be a regex; toggleUseRegex should revert
+TEST_F(FilterWorkflowTest, InvalidRegexRemainsStringModeAfterDialog) {
+    // "[bad" can't be a regex; entering edit + Tab + Return shows dialog
     addFilter("[bad");
     EXPECT_FALSE(chain_.filterAt(0).useRegex);
-    key(ftxui::Event::Character('x'));
-    // Still false because "[bad" is not a valid regex
+    key(ftxui::Event::Character('e'));   // enter edit mode (buffer: "[bad")
+    key(ftxui::Event::Tab);              // try to switch to regex mode
+    key(ftxui::Event::Return);           // pattern is invalid — dialog shown
+    EXPECT_TRUE(data().showDialog);
+    key(ftxui::Event::Character('q'));   // close dialog
+    // useRegex still false — edit was not committed
     EXPECT_FALSE(chain_.filterAt(0).useRegex);
 }
 

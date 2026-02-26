@@ -117,15 +117,15 @@ TEST_F(RealtimeTest, NavigationCancelsTailFollow) {
 
 // ── Mode switching ────────────────────────────────────────────────────────────
 
-TEST_F(RealtimeTest, SKeySetStaticMode) {
+TEST_F(RealtimeTest, SKeyTogglesRealtimeToStatic) {
     reader_.setMode(FileMode::Realtime);
     key(ftxui::Event::Character('s'));
     EXPECT_EQ(reader_.mode(), FileMode::Static);
 }
 
-TEST_F(RealtimeTest, RKeySetRealtimeMode) {
+TEST_F(RealtimeTest, SKeyTogglesStaticToRealtime) {
     reader_.setMode(FileMode::Static);
-    key(ftxui::Event::Character('r'));
+    key(ftxui::Event::Character('s'));
     EXPECT_EQ(reader_.mode(), FileMode::Realtime);
     reader_.setMode(FileMode::Static);  // cleanup: stop FileWatcher
 }

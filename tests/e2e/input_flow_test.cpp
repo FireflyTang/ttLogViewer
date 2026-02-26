@@ -54,12 +54,23 @@ TEST_F(InputFlowTest, AddFilterFullFlow) {
     EXPECT_EQ(chain_.filterAt(0).pattern, "line1");
 }
 
-TEST_F(InputFlowTest, AddFilterTabCyclesColor) {
+TEST_F(InputFlowTest, AddFilterTabTogglesRegex) {
     key(ftxui::Event::Character('a'));
-    auto d1 = data();
-    // Tab cycles color palette; inputBuffer should remain empty
+    EXPECT_FALSE(data().inputUseRegex);  // default: string mode
+    // Tab toggles regex mode; inputBuffer should remain empty
     key(ftxui::Event::Tab);
-    EXPECT_EQ(data().inputBuffer, d1.inputBuffer);  // buffer unchanged
+    EXPECT_TRUE(data().inputUseRegex);   // now regex mode
+    EXPECT_EQ(data().inputBuffer, "");   // buffer unchanged
+    EXPECT_TRUE(ctrl_.isInputActive());
+    key(ftxui::Event::Tab);
+    EXPECT_FALSE(data().inputUseRegex);  // toggled back to string mode
+}
+
+TEST_F(InputFlowTest, AddFilterXTypedIntoBuffer) {
+    key(ftxui::Event::Character('a'));
+    // 'x' is a regular character in filter input — must appear in buffer
+    key(ftxui::Event::Character('x'));
+    EXPECT_EQ(data().inputBuffer, "x");
     EXPECT_TRUE(ctrl_.isInputActive());
 }
 
@@ -80,18 +91,14 @@ TEST_F(InputFlowTest, AddFilterStringModeAnyPatternValid) {
 }
 
 TEST_F(InputFlowTest, EditFilterRegexModeInvalidPatternInvalid) {
-    // Add a filter, toggle to regex mode via 'x', then edit with an invalid regex.
+    // Add a filter, enter edit mode, toggle to regex via Tab, type an invalid regex.
     // In regex mode, invalid patterns should make inputValid=false.
-    //
-    // waitReprocess() is required: the reprocess background thread started by
-    // Return could overwrite the toggleUseRegex change if it swaps filters_
-    // back after the main thread has already set useRegex=true.
     key(ftxui::Event::Character('a'));
     type("ERROR");
     key(ftxui::Event::Return);
-    chain_.waitReprocess();             // ensure BG thread finishes before toggling
-    key(ftxui::Event::Character('x'));  // Toggle to regex mode
+    chain_.waitReprocess();
     key(ftxui::Event::Character('e'));  // Enter edit mode
+    key(ftxui::Event::Tab);             // Toggle to regex mode
     // Clear "ERROR" and type an invalid regex
     for (int i = 0; i < 5; ++i) key(ftxui::Event::Backspace);
     type("[invalid");
