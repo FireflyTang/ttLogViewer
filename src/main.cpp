@@ -52,17 +52,13 @@ int main(int argc, char* argv[]) {
     const std::string sPath = sessionPath();
     chain.load(sPath);
 
-    // Open file: command-line argument takes priority over last session file
+    // Open file: command-line argument only (no auto-reopen of last session file)
     if (argc >= 2) {
         const std::string path = argv[1];
         if (!reader.open(path)) {
             std::cerr << "ttLogViewer: cannot open '" << path << "'\n";
             return EXIT_FAILURE;
         }
-    } else if (!chain.sessionLastFile().empty()) {
-        const std::string lastFile{chain.sessionLastFile()};
-        reader.open(lastFile);          // Ignore failure (file may be gone)
-        reader.setMode(chain.sessionMode());
     }
 
     auto component = CreateMainComponent(controller, screen);

@@ -141,6 +141,16 @@ bool AppController::handleKey(const Event& event) {
     if (showDialog_)
         return handleKeyDialog(event);
 
+    // Allow ESC to cancel an in-progress reprocess immediately (None mode only;
+    // in input modes, ESC already exits the mode via handleCommonInputKeys).
+    if (event == Event::Escape && showProgress_ && inputMode_ == InputMode::None) {
+        chain_.cancelReprocess();
+        showProgress_          = false;
+        progress_              = 0.0;
+        reprocessTimeoutShown_ = false;
+        return true;
+    }
+
     switch (inputMode_) {
         case InputMode::None:
             return handleKeyNone(event);
@@ -754,7 +764,7 @@ void AppController::onTerminalResize(int width, int height) {
     if (width > 0) lastTerminalWidth_ = width;
     const int overhead  = AppConfig::global().uiOverheadRows;
     const int available = std::max(2, height - overhead);
-    lastRawPaneHeight_      = available / 2;
+    lastRawPaneHeight_      = available * 6 / 10;
     lastFilteredPaneHeight_ = available - lastRawPaneHeight_;
 
     clampScroll(rawState_,      reader_.lineCount(),        lastRawPaneHeight_);

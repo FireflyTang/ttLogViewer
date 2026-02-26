@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.4（Bug 修复 + UX 改进）
-> 测试：272 个，全部通过
+> 版本：v0.9.5（UX 改进）
+> 测试：281 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -275,6 +275,14 @@ CreateMainComponent(controller, screen)
 - `renderFilterBar`：每个过滤器标签后追加颜色指示圆点：`● ` + 过滤器颜色（启用），或 `○ ` + dim（禁用）
 - `renderInputLine` None 分支：当 `data.searchKeyword` 非空时，底部显示 `/keyword  (N/M)  n/N:跳转  Esc:清除`
 - `CatchEvent` q 键：改为调用 `controller.requestQuit(screen.ExitLoopClosure())`，并增加 `!controller.isDialogOpen()` 保护
+
+**v0.9.5 变更**：
+- `renderLogPane` 行号右对齐：从 `data.totalLines` 计算 `maxLineNoW`（总行数决定列宽），用 `std::format("{:>{}} ", rawLineNo, maxLineNoW)` 右对齐，内容列全文件一致
+- `renderFilterBar` 禁用圆点：`○ ` 改为 `color(parseHexColor(tag.color))`（移除 dim），与启用圆点统一用过滤器颜色
+- `onTerminalResize` 窗格比例：`available/2` → `available*6/10`（原始窗格 60%，过滤窗格 40%）
+- `handleKey` ESC 取消：在 None 模式检查 `showProgress_ && inputMode_==None`，立即 `cancelReprocess()`（不等 30s 超时）
+- `main.cpp`：删除启动时自动打开 `sessionLastFile` 的逻辑（过滤器仍持久化，只不再自动打开文件）
+- `cmake/version.rc.in`：新增 Windows VERSIONINFO 资源模板，CMake configure_file 生成，`src/CMakeLists.txt` WIN32 条件引入，使"打开方式"显示正确的 ProductName
 
 ---
 

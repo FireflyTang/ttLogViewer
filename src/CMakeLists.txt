@@ -22,7 +22,12 @@ target_link_libraries(ttLogViewer_lib PUBLIC
 )
 
 # ── Main executable ────────────────────────────────────────────────────────────
-add_executable(ttLogViewer main.cpp)
+if(WIN32)
+    # Include the generated Windows VERSIONINFO resource for proper "Open With" name
+    add_executable(ttLogViewer main.cpp ${CMAKE_BINARY_DIR}/version.rc)
+else()
+    add_executable(ttLogViewer main.cpp)
+endif()
 
 target_link_libraries(ttLogViewer PRIVATE ttLogViewer_lib)
 

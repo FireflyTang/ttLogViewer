@@ -213,6 +213,34 @@ TEST(LogPaneRender, LineNumbersAndFoldingTogether) {
     EXPECT_NE(out.find("…"),  std::string::npos);
 }
 
+// ── v0.9.5: right-aligned line numbers ───────────────────────────────────────
+
+TEST(LogPaneRender, LineNumbersRightAligned) {
+    // 11-line file → totalLines = 11 → maxLineNoW = 2
+    // Line 1 must render as " 1 " (right-aligned with a leading space)
+    std::string content;
+    for (int i = 1; i <= 11; ++i)
+        content += "x\n";
+    TempFile f(content);
+    LogReader reader;
+    reader.open(f.path());
+    waitForIndexing(reader);
+    FilterChain chain(reader);
+
+    AppController ctrl(reader, chain);
+    auto screen = ScreenInteractive::TerminalOutput();
+    auto comp   = CreateMainComponent(ctrl, screen);
+    ctrl.onTerminalResize(60, 20);
+
+    Screen s = Screen::Create(Dimension::Fixed(60), Dimension::Fixed(20));
+    Render(s, comp->Render());
+    std::string out = s.ToString();
+
+    // Single-digit line 1 should be padded to width 2: " 1" + trailing space = " 1 "
+    EXPECT_NE(out.find(" 1 "), std::string::npos)
+        << "line 1 should be right-aligned with a leading space when totalLines >= 10";
+}
+
 // ── Phase 3: folding only affects the folded line ─────────────────────────────
 
 TEST(LogPaneRender, UnfoldedLinesAreUnaffected) {

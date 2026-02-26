@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(ttLogViewer
-    VERSION 0.9.4
+    VERSION 0.9.5
     DESCRIPTION "A fast terminal log file viewer"
     LANGUAGES CXX
 )
@@ -50,6 +50,12 @@ FetchContent_MakeAvailable(json)
 # ── Version header (generated at configure time) ───────────────────────────────
 configure_file(cmake/version.hpp.in
                ${CMAKE_BINARY_DIR}/include/version.hpp)
+
+# ── Windows version resource (generated at configure time) ─────────────────────
+if(WIN32)
+    configure_file(cmake/version.rc.in
+                   ${CMAKE_BINARY_DIR}/version.rc)
+endif()
 
 # ── Platform-specific link libraries ──────────────────────────────────────────
 set(PLATFORM_LIBS "")

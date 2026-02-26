@@ -67,9 +67,18 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
                               bool focused,
                               bool showLineNumbers,
                               int terminalWidth,
-                              size_t hScroll) {
+                              size_t hScroll,
+                              size_t totalLines) {
     if (lines.empty())
         return text("") | flex;
+
+    // Use the total file line count to fix the line-number column width for the
+    // entire file.  This prevents the content column from jumping when scrolling
+    // across a digit-count boundary (e.g., lines 9→10) or when new lines are
+    // appended in realtime mode and the total crosses a 10× boundary.
+    int maxLineNoW = showLineNumbers
+        ? static_cast<int>(std::to_string(totalLines).size())
+        : 0;
 
     Elements rows;
     rows.reserve(lines.size());
@@ -79,11 +88,12 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         // Compute the prefix width so renderColoredLine can reserve space for "…"
         int prefixCols = 2;  // "▶ " or "  "
         if (showLineNumbers)
-            prefixCols += static_cast<int>(std::to_string(ll.rawLineNo).size()) + 1;
+            prefixCols += maxLineNoW + 1;
         int contentWidth = terminalWidth > prefixCols ? terminalWidth - prefixCols : 0;
 
         if (showLineNumbers)
-            parts.push_back(text(std::to_string(ll.rawLineNo) + " ") | dim);
+            parts.push_back(
+                text(std::format("{:>{}} ", ll.rawLineNo, maxLineNoW)) | dim);
         parts.push_back(text(ll.highlighted ? "▶ " : "  "));
         parts.push_back(
             renderColoredLine(ll.content, ll.colors, ll.searchSpans,
@@ -114,10 +124,10 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element e = text(std::move(label));
         if (tag.selected)  e = e | inverted;
         if (!tag.enabled)  e = e | dim;
-        // Colored dot indicator: ● in filter color (enabled) or ○ dim (disabled)
+        // Colored dot indicator: ● (enabled) or ○ (disabled), both in filter color
         Element dot = tag.enabled
             ? Element(text("● ") | color(parseHexColor(tag.color)))
-            : Element(text("○ ") | dim);
+            : Element(text("○ ") | color(parseHexColor(tag.color)));
         items.push_back(hbox({ std::move(e), std::move(dot) }));
     }
     return hbox(std::move(items));
@@ -212,12 +222,12 @@ Component CreateMainComponent(AppController& controller,
             separator(),
             renderLogPane(data.rawPane, data.rawFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.rawHScroll)
+                           data.rawHScroll, data.totalLines)
                 | size(HEIGHT, EQUAL, rawH),
             separator(),
             renderLogPane(data.filteredPane, data.filteredFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.filtHScroll)
+                           data.filtHScroll, data.totalLines)
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),

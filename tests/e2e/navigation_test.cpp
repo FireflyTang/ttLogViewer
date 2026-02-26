@@ -1,11 +1,17 @@
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <ftxui/component/event.hpp>
 
 #include "app_controller.hpp"
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
+#include "mock_filter_chain.hpp"
 #include "temp_file.hpp"
 #include "test_utils.hpp"
+
+using ::testing::Return;
+using ::testing::_;
+using ::testing::AtLeast;
 
 class NavigationTest : public ::testing::Test {
 protected:
@@ -283,4 +289,76 @@ TEST_F(NavigationTest, SearchKeywordClearedOnEmptySearch) {
     key(ftxui::Event::Character('/'));
     key(ftxui::Event::Return);
     EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+}
+
+// ── Feature #8: pane height ratio 6:4 ────────────────────────────────────────
+
+TEST_F(NavigationTest, PaneHeightRatio6to4) {
+    // With uiOverheadRows=6 (default), available = 26 - 6 = 20
+    // raw = 20 * 6/10 = 12,  filt = 20 - 12 = 8
+    ctrl_.onTerminalResize(80, 26);
+    EXPECT_EQ(ctrl_.rawPaneHeight(),  12);
+    EXPECT_EQ(ctrl_.filtPaneHeight(),  8);
+}
+
+TEST_F(NavigationTest, PaneHeightRatio6to4SmallTerminal) {
+    // With only 10 available rows: raw = 6, filt = 4
+    // uiOverheadRows=6, so height=16 → available=10
+    ctrl_.onTerminalResize(80, 16);
+    EXPECT_EQ(ctrl_.rawPaneHeight(),  6);
+    EXPECT_EQ(ctrl_.filtPaneHeight(), 4);
+}
+
+// ── Feature #6: ESC cancels reprocess when progress is shown ─────────────────
+
+// Fixture that uses MockFilterChain so reprocess() never calls onDone,
+// keeping showProgress_ == true until ESC is pressed.
+class EscCancelReprocessTest : public ::testing::Test {
+protected:
+    static FilterDef dummyDef() { FilterDef d; d.pattern = "x"; return d; }
+
+    void SetUp() override {
+        // filteredLineCount / filterCount: 0 before append, 1 after
+        EXPECT_CALL(chain_, filteredLineCount()).WillRepeatedly(Return(size_t{0}));
+        EXPECT_CALL(chain_, filterCount())
+            .WillRepeatedly(Return(size_t{0}));           // start: no filters
+        EXPECT_CALL(chain_, filteredLineCountAt(_))
+            .WillRepeatedly(Return(size_t{0}));
+
+        // append() is called once; code ignores the return value
+        EXPECT_CALL(chain_, append(_)).Times(1);
+
+        // reprocess() deliberately does NOT call onDone → showProgress_ stays true
+        EXPECT_CALL(chain_, reprocess(_, _, _)).Times(1);
+
+        // ESC must trigger exactly one cancelReprocess() call
+        EXPECT_CALL(chain_, cancelReprocess()).Times(1);
+
+        ctrl_.getViewData(5, 5);  // initialise stored pane heights
+    }
+
+    MockFilterChain chain_;
+    LogReader       reader_;
+    AppController   ctrl_{reader_, chain_};
+
+    bool key(ftxui::Event e) { return ctrl_.handleKey(e); }
+    void type(const std::string& s) {
+        for (char c : s)
+            key(ftxui::Event::Character(std::string(1, c)));
+    }
+};
+
+TEST_F(EscCancelReprocessTest, EscDuringProgressCancelsReprocess) {
+    // Trigger reprocess: 'a' → type pattern → Enter
+    key(ftxui::Event::Character('a'));
+    type("pattern");
+    key(ftxui::Event::Return);
+
+    // Reprocess is now "in progress" (mock never called onDone)
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).showProgress);
+
+    // ESC must cancel and clear the progress flag
+    key(ftxui::Event::Escape);
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).showProgress);
+    // cancelReprocess() expectation is verified by GoogleMock on TearDown
 }
