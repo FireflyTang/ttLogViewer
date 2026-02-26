@@ -23,9 +23,9 @@ TEST_F(FilterBarTest, MultipleFiltersShowNumbers) {
 // ── v0.9.4: color dot indicators ─────────────────────────────────────────────
 
 TEST_F(FilterBarTest, EnabledFilterShowsFilledDot) {
-    // An enabled filter must render ● (U+25CF, UTF-8: E2 97 8F)
+    // An enabled filter must render ⬤ (U+2B24, UTF-8: E2 AC A4)
     chain_.append({.pattern = "ERROR", .color = "#FF5555", .enabled = true});
-    EXPECT_NE(renderCtrl().find("\xe2\x97\x8f"), std::string::npos);
+    EXPECT_NE(renderCtrl().find("\xe2\xac\xa4"), std::string::npos);
 }
 
 TEST_F(FilterBarTest, DisabledFilterShowsEmptyDot) {

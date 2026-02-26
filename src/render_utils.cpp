@@ -138,14 +138,14 @@ Element renderColoredLine(std::string_view content,
         for (const auto& s : clippedSpans)
             if (s.start <= a && b <= s.end) { col = s.color; break; }
 
-        // Determine whether to apply bold+underlined from SearchSpan
+        // Determine whether to apply inverted color from SearchSpan
         bool isMatch = false;
         for (const auto& s : clippedSearchSpans)
             if (s.start <= a && b <= s.end) { isMatch = true; break; }
 
         Element e = text(std::string(content.substr(a, len)));
         if (!col.empty())  e = e | color(parseHexColor(col));
-        if (isMatch)       e = e | bold | underlined;
+        if (isMatch)       e = e | inverted;
         parts.push_back(std::move(e));
     }
 

@@ -20,9 +20,13 @@ TEST_F(InputLineTest, FilterAddTypingAppearsInBuffer) {
     EXPECT_NE(renderCtrl().find("ERR"), std::string::npos);
 }
 
-TEST_F(InputLineTest, SearchModeShowsPrompt) {
+TEST_F(InputLineTest, SearchModeShowsModeIndicator) {
+    // Search input now shows [字符串] or [正则] instead of "Search>"
     key(ftxui::Event::Character('/'));
-    EXPECT_NE(renderCtrl().find("Search>"), std::string::npos);
+    std::string out = renderCtrl();
+    // Default literal mode indicator must appear
+    EXPECT_NE(out.find("\xe5\xad\x97\xe7\xac\xa6\xe4\xb8\xb2"), std::string::npos)
+        << "Expected '字符串' in search input line";
 }
 
 TEST_F(InputLineTest, GotoLineModeShowsPrompt) {

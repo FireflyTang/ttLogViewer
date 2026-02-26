@@ -2,6 +2,8 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <optional>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -42,7 +44,7 @@ struct LogLine {
     size_t                  rawLineNo   = 0;
     std::string_view        content;
     std::vector<ColorSpan>  colors;
-    std::vector<SearchSpan> searchSpans;   // bold+underlined search matches
+    std::vector<SearchSpan> searchSpans;   // inverted-color search matches
     bool                    highlighted = false;
     bool                    folded      = false;  // Phase 3
 };
@@ -98,6 +100,8 @@ struct ViewData {
     std::string searchKeyword;        // active search keyword; empty if none
     size_t      searchResultCount = 0;
     size_t      searchResultIndex = 0;  // 1-based current result position
+    bool        searchActive      = false;  // true while a search keyword is set
+    bool        searchUseRegex    = false;  // current search mode (regex or literal)
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -172,10 +176,12 @@ private:
     size_t colorPaletteIdx_ = 0;    // Cycles through palette on Tab in FilterAdd
 
     // ── Search state ──────────────────────────────────────────────────────────
-    std::vector<size_t> searchResults_;       // 1-based raw line numbers
-    size_t              searchIndex_      = 0;
-    std::string         searchKeyword_;        // Last committed keyword (for spans)
-    bool                searchInFiltered_ = false;  // Search was in filtered pane
+    std::vector<size_t>       searchResults_;       // 1-based raw line numbers
+    size_t                    searchIndex_      = 0;
+    std::string               searchKeyword_;       // Last committed keyword (for spans)
+    bool                      searchInFiltered_ = false;  // Search was in filtered pane
+    bool                      searchUseRegex_   = false;  // Use regex matching for search
+    std::optional<std::regex> searchRegex_;         // Compiled regex (when searchUseRegex_)
 
     // ── Real-time / tail-follow ───────────────────────────────────────────────
     bool   followTail_   = false;

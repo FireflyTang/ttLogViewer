@@ -68,7 +68,8 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
                               bool showLineNumbers,
                               int terminalWidth,
                               size_t hScroll,
-                              size_t totalLines) {
+                              size_t totalLines,
+                              bool searchActive) {
     if (lines.empty())
         return text("") | flex;
 
@@ -98,14 +99,17 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         if (showLineNumbers)
             parts.push_back(
                 text(std::format("{:>{}} ", ll.rawLineNo, maxLineNoW)) | dim);
-        parts.push_back(text(ll.highlighted ? "▶ " : "  "));
+        // During an active search, suppress the ▶ cursor marker so it does not
+        // jump around as the search scrolls through results.
+        parts.push_back(text((ll.highlighted && !searchActive) ? "▶ " : "  "));
         parts.push_back(
             renderColoredLine(ll.content, ll.colors, ll.searchSpans,
                               ll.folded, contentWidth, hScroll) | flex);
 
         Element row = hbox(std::move(parts));
 
-        if (ll.highlighted && focused)
+        // Also suppress the whole-line inverted background during active search.
+        if (ll.highlighted && focused && !searchActive)
             row = row | inverted;
 
         rows.push_back(row);
@@ -121,18 +125,19 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
     Elements items;
     items.reserve(tags.size());
     for (const auto& tag : tags) {
-        // Use std::format for efficient string formatting (C++20)
-        // Format: " [1:pattern](N) " or " [1R:pattern](N) " for regex mode
-        std::string label = std::format(" [{}{}:{}]({}) ",
+        // Format: " [1:pattern](N)" or " [1R:pattern](N)" — no trailing space,
+        // the dot follows immediately so there is no gap between count and dot.
+        std::string label = std::format(" [{}{}:{}]({})",
             tag.number, tag.useRegex ? "R" : "", tag.pattern, tag.matchCount);
-        Element e = text(std::move(label));
-        if (tag.selected)  e = e | inverted;
-        if (!tag.enabled)  e = e | dim;
-        // Colored dot indicator: ● (enabled) or ○ (disabled), both in filter color
+        // ⬤ (U+2B24) is a larger filled circle than ●; ○ stays for disabled state.
         Element dot = tag.enabled
-            ? Element(text("● ") | color(parseHexColor(tag.color)))
+            ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
             : Element(text("○ ") | color(parseHexColor(tag.color)));
-        items.push_back(hbox({ std::move(e), std::move(dot) }));
+        // Combine label + dot into one element so selection highlight covers both.
+        Element row = hbox({ text(std::move(label)), std::move(dot) });
+        if (tag.selected) row = row | inverted;
+        if (!tag.enabled) row = row | dim;
+        items.push_back(std::move(row));
     }
     return hbox(std::move(items));
 }
@@ -150,8 +155,13 @@ static Element renderInputLine(const ViewData& data) {
             }
             return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
 
-        case InputMode::Search:
-            return hbox({ text(data.inputPrompt), text(data.inputBuffer) | bold, text("_") });
+        case InputMode::Search: {
+            std::string modeTag = data.searchUseRegex ? " [正则] " : " [字符串] ";
+            return hbox({ text(modeTag) | dim,
+                          text(data.inputBuffer) | bold,
+                          text("_"),
+                          text("  Tab:切换") | dim });
+        }
 
         case InputMode::FilterAdd:
         case InputMode::FilterEdit: {
@@ -226,12 +236,12 @@ Component CreateMainComponent(AppController& controller,
             separator(),
             renderLogPane(data.rawPane, data.rawFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.rawHScroll, data.totalLines)
+                           data.rawHScroll, data.totalLines, data.searchActive)
                 | size(HEIGHT, EQUAL, rawH),
             separator(),
             renderLogPane(data.filteredPane, data.filteredFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.filtHScroll, data.totalLines)
+                           data.filtHScroll, data.totalLines, data.searchActive)
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),
@@ -283,9 +293,9 @@ Component CreateMainComponent(AppController& controller,
             if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
                 const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
                 if (overRaw)
-                    controller.scrollPane(FocusArea::Raw,      dir * 3);
+                    controller.scrollPane(FocusArea::Raw,      dir);
                 else if (overFilt)
-                    controller.scrollPane(FocusArea::Filtered, dir * 3);
+                    controller.scrollPane(FocusArea::Filtered, dir);
                 return true;
             }
             if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {

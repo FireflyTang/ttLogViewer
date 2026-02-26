@@ -177,7 +177,7 @@ TEST_F(SearchTest, SearchFilteredPaneFindsOnlyFilteredLines) {
     key(ftxui::Event::Return);
     chain_.waitReprocess();
 
-    // Switch focus to filtered pane
+    // Switch focus to filtered pane (Tab clears search, but no search is active yet)
     key(ftxui::Event::Tab);
 
     // Search "pie" — only line 1 has "pie" among the filtered lines
@@ -187,4 +187,72 @@ TEST_F(SearchTest, SearchFilteredPaneFindsOnlyFilteredLines) {
     for (auto& ll : data.filteredPane)
         if (ll.highlighted) hl = ll.rawLineNo;
     EXPECT_EQ(hl, 1u);
+}
+
+// ── ESC in None mode clears search ───────────────────────────────────────────
+
+TEST_F(SearchTest, EscInNoneModeClears) {
+    search("apple");
+    // searchKeyword is now set; pressing ESC in None mode should clear it
+    ASSERT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+    key(ftxui::Event::Escape);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+}
+
+TEST_F(SearchTest, EscInNoneModeClears_SpansGone) {
+    search("apple");
+    key(ftxui::Event::Escape);
+    auto data = ctrl_.getViewData(5, 5);
+    for (auto& ll : data.rawPane)
+        EXPECT_TRUE(ll.searchSpans.empty()) << "Line " << ll.rawLineNo << " still has spans";
+}
+
+// ── Tab auto-clears search ───────────────────────────────────────────────────
+
+TEST_F(SearchTest, TabClearsSearch) {
+    search("apple");
+    ASSERT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+    // Tab switches panes and should also clear the active search
+    key(ftxui::Event::Tab);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+}
+
+// ── Search regex mode toggle ─────────────────────────────────────────────────
+
+TEST_F(SearchTest, SearchUseRegexDefaultFalse) {
+    // Regex mode is off by default
+    key(ftxui::Event::Character('/'));
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).searchUseRegex);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(SearchTest, TabTogglesSearchRegexDuringInput) {
+    key(ftxui::Event::Character('/'));
+    bool before = ctrl_.getViewData(5, 5).searchUseRegex;
+    key(ftxui::Event::Tab);   // toggle in search input mode
+    bool after = ctrl_.getViewData(5, 5).searchUseRegex;
+    EXPECT_NE(before, after);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(SearchTest, RegexSearchFindsMatch) {
+    // Toggle regex mode, then search with a regex pattern
+    key(ftxui::Event::Character('/'));
+    key(ftxui::Event::Tab);  // enable regex
+    type("app.e");            // regex pattern matching "apple"
+    key(ftxui::Event::Return);
+    // Lines 1, 3, 5 contain "apple" — highlighted line should be 1
+    EXPECT_EQ(highlightedLine(), 1u);
+}
+
+TEST_F(SearchTest, RegexSearchSpansPresent) {
+    key(ftxui::Event::Character('/'));
+    key(ftxui::Event::Tab);  // enable regex
+    type("app.e");
+    key(ftxui::Event::Return);
+    auto data = ctrl_.getViewData(5, 5);
+    bool found = false;
+    for (auto& ll : data.rawPane)
+        if (ll.rawLineNo == 1 && !ll.searchSpans.empty()) { found = true; break; }
+    EXPECT_TRUE(found);
 }

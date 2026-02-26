@@ -32,8 +32,8 @@ static constexpr std::string_view kHelpText =
     "+/-: 调整过滤器顺序\n"
     "Space: 启停过滤器\n"
     "x: 切换正则/字符串匹配模式\n"
-    "/: 搜索\n"
-    "n/p: 下/上一搜索结果\n"
+    "/: 搜索 (输入时 Tab 切换正则/字符串)\n"
+    "n/p: 下/上一搜索结果  Esc:清除搜索\n"
     "g: 跳转行号\n"
     "G: 跟随末尾\n"
     "o: 打开文件\n"
@@ -151,6 +151,16 @@ bool AppController::handleKey(const Event& event) {
         return true;
     }
 
+    // ESC in None mode with an active search → clear search state.
+    if (event == Event::Escape && !searchKeyword_.empty() && inputMode_ == InputMode::None) {
+        searchResults_.clear();
+        searchIndex_      = 0;
+        searchKeyword_.clear();
+        searchInFiltered_ = false;
+        searchRegex_.reset();
+        return true;
+    }
+
     switch (inputMode_) {
         case InputMode::None:
             return handleKeyNone(event);
@@ -203,8 +213,13 @@ bool AppController::handleNavKeys(const Event& event, int activePh) {
         return true;
     }
 
-    // Focus switch
+    // Focus switch — also clear any active search so old results don't persist
     if (event == Event::Tab || event == Event::TabReverse) {
+        searchResults_.clear();
+        searchIndex_      = 0;
+        searchKeyword_.clear();
+        searchInFiltered_ = false;
+        searchRegex_.reset();
         focus_ = (focus_ == FocusArea::Raw) ? FocusArea::Filtered : FocusArea::Raw;
         return true;
     }
@@ -441,6 +456,7 @@ bool AppController::handleKeySearch(const Event& event) {
         searchIndex_      = 0;
         searchKeyword_.clear();
         searchInFiltered_ = false;
+        searchRegex_.reset();
         exitInputMode();
         return true;
     }
@@ -449,6 +465,12 @@ bool AppController::handleKeySearch(const Event& event) {
     if (event == Event::Return) {
         runSearch(inputBuffer_);
         exitInputMode();
+        return true;
+    }
+
+    // Tab: toggle regex / literal search mode
+    if (event == Event::Tab) {
+        searchUseRegex_ = !searchUseRegex_;
         return true;
     }
 
@@ -627,15 +649,28 @@ void AppController::handleFileReset() {
 
 // ── getViewData helpers ────────────────────────────────────────────────────────
 
-// Returns all byte-ranges in `content` where `keyword` occurs (literal search).
-static std::vector<SearchSpan> computeSearchSpans(std::string_view content,
-                                                   const std::string& keyword) {
+// Returns all byte-ranges in `content` where `keyword` occurs.
+// When useRegex is true, uses the pre-compiled regex; falls back to literal on error.
+static std::vector<SearchSpan> computeSearchSpans(
+        std::string_view content,
+        const std::string& keyword,
+        bool useRegex,
+        const std::optional<std::regex>& regex) {
     std::vector<SearchSpan> result;
     if (keyword.empty()) return result;
-    size_t pos = 0;
-    while ((pos = content.find(keyword, pos)) != std::string_view::npos) {
-        result.push_back({pos, pos + keyword.size()});
-        pos += keyword.size();
+    if (useRegex && regex) {
+        std::string s(content);
+        auto it  = std::sregex_iterator(s.begin(), s.end(), *regex);
+        auto end = std::sregex_iterator();
+        for (; it != end; ++it)
+            result.push_back({static_cast<size_t>(it->position()),
+                              static_cast<size_t>(it->position() + it->length())});
+    } else {
+        size_t pos = 0;
+        while ((pos = content.find(keyword, pos)) != std::string_view::npos) {
+            result.push_back({pos, pos + keyword.size()});
+            pos += keyword.size();
+        }
     }
     return result;
 }
@@ -649,25 +684,26 @@ void AppController::buildRawPane(ViewData& data) {
     const size_t first = rawState_.scrollOffset;
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
-    // Pre-compute the highlighted search line for raw-pane searches (0 = none).
-    // When the search was run in the filtered pane, don't highlight in raw pane.
-    const size_t resultCount = searchResults_.size();
-    const size_t searchLine = (!searchInFiltered_ && resultCount > 0
-                               && searchIndex_ < resultCount)
-                              ? searchResults_[searchIndex_] : 0;
-
     data.rawPane.reserve(count);
+    size_t maxContentLen = 0;
     for (size_t i = 0; i < count; ++i) {
         const size_t lineNo = first + i + 1;
         LogLine ll;
         ll.rawLineNo   = lineNo;
         ll.content     = reader_.getLine(lineNo);
         ll.colors      = {};   // raw pane does not show filter match colors
-        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_);
-        ll.highlighted = (first + i == rawState_.cursor) || (lineNo == searchLine);
+        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_,
+                                            searchUseRegex_, searchRegex_);
+        ll.highlighted = (first + i == rawState_.cursor);
         ll.folded      = (foldedLines_.count(lineNo) > 0);
+        maxContentLen  = std::max(maxContentLen, ll.content.size());
         data.rawPane.push_back(std::move(ll));
     }
+
+    // Clamp horizontal scroll: keep at least one byte of the longest visible line visible.
+    // Skip when there are no visible lines (maxContentLen == 0) to avoid losing the offset.
+    if (maxContentLen > 0 && rawState_.hScrollOffset >= maxContentLen)
+        rawState_.hScrollOffset = maxContentLen - 1;
 }
 
 void AppController::buildFilteredPane(ViewData& data) {
@@ -679,25 +715,26 @@ void AppController::buildFilteredPane(ViewData& data) {
     const size_t first = filteredState_.scrollOffset;
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
-    // Pre-compute the highlighted search line for filtered-pane searches (0 = none).
-    const size_t filtResultCount = searchResults_.size();
-    const size_t filtSearchLine = (searchInFiltered_ && filtResultCount > 0
-                                   && searchIndex_ < filtResultCount)
-                                  ? searchResults_[searchIndex_] : 0;
-
     data.filteredPane.reserve(count);
+    size_t maxContentLenFilt = 0;
     for (size_t i = 0; i < count; ++i) {
         const size_t rawLineNo = chain_.filteredLineAt(first + i);
         LogLine ll;
         ll.rawLineNo   = rawLineNo;
         ll.content     = reader_.getLine(rawLineNo);
         ll.colors      = chain_.computeColors(rawLineNo, ll.content);
-        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_);
-        ll.highlighted = (first + i == filteredState_.cursor)
-                      || (searchInFiltered_ && rawLineNo == filtSearchLine);
+        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_,
+                                            searchUseRegex_, searchRegex_);
+        ll.highlighted = (first + i == filteredState_.cursor);
         ll.folded      = (foldedLines_.count(rawLineNo) > 0);
+        maxContentLenFilt = std::max(maxContentLenFilt, ll.content.size());
         data.filteredPane.push_back(std::move(ll));
     }
+
+    // Clamp horizontal scroll: keep at least one byte of the longest visible line visible.
+    // Skip when there are no visible lines (maxContentLenFilt == 0) to avoid losing the offset.
+    if (maxContentLenFilt > 0 && filteredState_.hScrollOffset >= maxContentLenFilt)
+        filteredState_.hScrollOffset = maxContentLenFilt - 1;
 }
 
 // ── getViewData ────────────────────────────────────────────────────────────────
@@ -735,6 +772,8 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.searchKeyword     = searchKeyword_;
     data.searchResultCount = searchResults_.size();
     data.searchResultIndex = searchResults_.empty() ? 0 : searchIndex_ + 1;
+    data.searchActive      = !searchKeyword_.empty();
+    data.searchUseRegex    = searchUseRegex_;
 
     buildRawPane(data);
     buildFilteredPane(data);
@@ -940,8 +979,26 @@ void AppController::runSearch(const std::string& keyword) {
     searchIndex_      = 0;
     searchKeyword_    = keyword;
     searchInFiltered_ = (focus_ == FocusArea::Filtered);
+    searchRegex_.reset();
 
     if (keyword.empty()) return;
+
+    // Compile regex once if in regex mode (fall back to literal on error).
+    if (searchUseRegex_) {
+        try {
+            searchRegex_ = std::regex(keyword);
+        } catch (const std::regex_error&) {
+            searchUseRegex_ = false;   // invalid pattern → silently use literal
+        }
+    }
+
+    auto lineMatches = [&](std::string_view line) -> bool {
+        if (searchUseRegex_ && searchRegex_) {
+            std::string s(line);
+            return std::regex_search(s, *searchRegex_);
+        }
+        return line.find(keyword) != std::string_view::npos;
+    };
 
     if (!searchInFiltered_) {
         // Scan all raw lines
@@ -954,8 +1011,7 @@ void AppController::runSearch(const std::string& keyword) {
         searchResults_.reserve(std::min(reserveEstimate,
                                         AppConfig::global().searchReserveMax));
         for (size_t i = 1; i <= total; ++i) {
-            std::string_view line = reader_.getLine(i);
-            if (line.find(keyword) != std::string_view::npos)
+            if (lineMatches(reader_.getLine(i)))
                 searchResults_.push_back(i);
         }
     } else {
@@ -963,7 +1019,7 @@ void AppController::runSearch(const std::string& keyword) {
         const size_t total = chain_.filteredLineCount();
         for (size_t i = 0; i < total; ++i) {
             const size_t rawNo = chain_.filteredLineAt(i);
-            if (reader_.getLine(rawNo).find(keyword) != std::string_view::npos)
+            if (lineMatches(reader_.getLine(rawNo)))
                 searchResults_.push_back(rawNo);
         }
     }
