@@ -43,8 +43,13 @@ struct SearchSpan {
 // Spans are NOT applied to folded lines to keep the implementation simple.
 //
 // `terminalWidth` == 0 disables folding even when `folded` is true.
+//
+// `hOffset` (default 0) skips the first `hOffset` bytes of content (UTF-8
+// boundary aligned), enabling horizontal scrolling.  Spans are shifted
+// accordingly; spans that end before the offset are dropped.
 ftxui::Element renderColoredLine(std::string_view content,
                                   const std::vector<ColorSpan>& spans,
                                   const std::vector<SearchSpan>& searchSpans = {},
                                   bool folded = false,
-                                  int terminalWidth = 0);
+                                  int terminalWidth = 0,
+                                  size_t hOffset = 0);

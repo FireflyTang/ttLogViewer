@@ -17,11 +17,14 @@ using namespace ftxui;
 
 // Full help text shown by the 'h' key.  Extracted here to keep handleModeKeys()
 // readable and to make it easy to update the text in one place.
+static constexpr size_t kHScrollStep = 4;   // bytes per ArrowLeft/ArrowRight press
+
 static constexpr std::string_view kHelpText =
     "↑↓: 移动光标\n"
     "PgUp/PgDn: 翻页\n"
     "Home/End: 首/末行\n"
     "Tab: 切换区域\n"
+    "←/→: 水平滚动\n"
     "a: 添加过滤器\n"
     "e: 编辑过滤器\n"
     "d: 删除过滤器\n"
@@ -193,6 +196,18 @@ bool AppController::handleNavKeys(const Event& event, int activePh) {
     // Focus switch
     if (event == Event::Tab || event == Event::TabReverse) {
         focus_ = (focus_ == FocusArea::Raw) ? FocusArea::Filtered : FocusArea::Raw;
+        return true;
+    }
+
+    // Horizontal scroll
+    if (event == Event::ArrowLeft) {
+        PaneState& ps = activeState();
+        ps.hScrollOffset = (ps.hScrollOffset >= kHScrollStep)
+                           ? ps.hScrollOffset - kHScrollStep : 0;
+        return true;
+    }
+    if (event == Event::ArrowRight) {
+        activeState().hScrollOffset += kHScrollStep;
         return true;
     }
 
@@ -690,6 +705,8 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.isIndexing      = reader_.isIndexing();
     data.rawFocused      = (focus_ == FocusArea::Raw);
     data.filteredFocused = !data.rawFocused;
+    data.rawHScroll      = rawState_.hScrollOffset;
+    data.filtHScroll     = filteredState_.hScrollOffset;
     data.inputMode       = inputMode_;
     data.inputPrompt     = inputPrompt_;
     data.inputBuffer     = inputBuffer_;
@@ -974,4 +991,29 @@ void AppController::toggleFoldCurrentLine() {
         else
             foldedLines_.insert(rawLine);
     }
+}
+
+// ── Mouse-support helpers ──────────────────────────────────────────────────────
+
+void AppController::scrollPane(FocusArea area, int delta) {
+    PaneState& ps    = (area == FocusArea::Raw) ? rawState_ : filteredState_;
+    const size_t total = (area == FocusArea::Raw)
+                         ? reader_.lineCount()
+                         : chain_.filteredLineCount();
+    const int ph = (area == FocusArea::Raw)
+                   ? lastRawPaneHeight_
+                   : lastFilteredPaneHeight_;
+    if (total == 0) return;
+    if (delta < 0) {
+        const size_t step = static_cast<size_t>(-delta);
+        ps.cursor = (ps.cursor >= step) ? ps.cursor - step : 0;
+    } else {
+        ps.cursor = std::min(ps.cursor + static_cast<size_t>(delta), total - 1);
+    }
+    clampScroll(ps, total, ph);
+    followTail_ = false;
+}
+
+void AppController::setFocus(FocusArea area) {
+    focus_ = area;
 }

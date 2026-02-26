@@ -66,7 +66,8 @@ static Element renderStatusBar(const ViewData& data) {
 static Element renderLogPane(const std::vector<LogLine>& lines,
                               bool focused,
                               bool showLineNumbers,
-                              int terminalWidth) {
+                              int terminalWidth,
+                              size_t hScroll) {
     if (lines.empty())
         return text("") | flex;
 
@@ -86,7 +87,7 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         parts.push_back(text(ll.highlighted ? "▶ " : "  "));
         parts.push_back(
             renderColoredLine(ll.content, ll.colors, ll.searchSpans,
-                              ll.folded, contentWidth) | flex);
+                              ll.folded, contentWidth, hScroll) | flex);
 
         Element row = hbox(std::move(parts));
 
@@ -198,11 +199,13 @@ Component CreateMainComponent(AppController& controller,
             renderStatusBar(data),
             separator(),
             renderLogPane(data.rawPane, data.rawFocused,
-                           data.showLineNumbers, data.terminalWidth)
+                           data.showLineNumbers, data.terminalWidth,
+                           data.rawHScroll)
                 | size(HEIGHT, EQUAL, rawH),
             separator(),
             renderLogPane(data.filteredPane, data.filteredFocused,
-                           data.showLineNumbers, data.terminalWidth)
+                           data.showLineNumbers, data.terminalWidth,
+                           data.filtHScroll)
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),
@@ -228,6 +231,45 @@ Component CreateMainComponent(AppController& controller,
             auto [dimx, dimy] = Terminal::Size();
             controller.onTerminalResize(dimx, dimy);
         }
+
+        // Mouse events: wheel scroll and click-to-focus
+        if (event.is_mouse()) {
+            const auto& m     = event.mouse();
+            const int   rawH  = controller.rawPaneHeight();
+            const int   filtH = controller.filtPaneHeight();
+
+            // Layout row boundaries (0-based):
+            //   row 0          : status bar
+            //   row 1          : separator
+            //   rows 2..1+rawH : raw pane
+            //   row  2+rawH    : separator
+            //   rows 3+rawH..2+rawH+filtH : filtered pane
+            const int rawTop  = 2;
+            const int rawBot  = 1 + rawH;
+            const int filtTop = 3 + rawH;
+            const int filtBot = 2 + rawH + filtH;
+
+            const bool overRaw  = (m.y >= rawTop  && m.y <= rawBot);
+            const bool overFilt = (m.y >= filtTop && m.y <= filtBot);
+
+            if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
+                const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
+                if (overRaw)
+                    controller.scrollPane(FocusArea::Raw,      dir * 3);
+                else if (overFilt)
+                    controller.scrollPane(FocusArea::Filtered, dir * 3);
+                return true;
+            }
+            if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
+                if (overRaw)
+                    controller.setFocus(FocusArea::Raw);
+                else if (overFilt)
+                    controller.setFocus(FocusArea::Filtered);
+                return true;
+            }
+            return false;
+        }
+
         return controller.handleKey(event);
     });
 }

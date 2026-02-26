@@ -158,3 +158,60 @@ TEST_F(NavigationTest, HKeyDialogClosesOnAnyKey) {
     key(ftxui::Event::Return);
     EXPECT_FALSE(ctrl_.getViewData(5, 5).showDialog);
 }
+
+// ── Horizontal scroll (ArrowLeft / ArrowRight) ────────────────────────────────
+
+TEST_F(NavigationTest, ArrowRightIncreasesHScroll) {
+    key(ftxui::Event::ArrowRight);
+    EXPECT_GT(ctrl_.getViewData(5, 5).rawHScroll, 0u);
+}
+
+TEST_F(NavigationTest, ArrowLeftDecreasesHScroll) {
+    key(ftxui::Event::ArrowRight);
+    key(ftxui::Event::ArrowRight);
+    const size_t after2 = ctrl_.getViewData(5, 5).rawHScroll;
+    key(ftxui::Event::ArrowLeft);
+    EXPECT_LT(ctrl_.getViewData(5, 5).rawHScroll, after2);
+}
+
+TEST_F(NavigationTest, ArrowLeftAtZeroStaysZero) {
+    key(ftxui::Event::ArrowLeft);
+    EXPECT_EQ(ctrl_.getViewData(5, 5).rawHScroll, 0u);
+}
+
+TEST_F(NavigationTest, HScrollIsIndependentPerPane) {
+    // Scroll raw pane right
+    key(ftxui::Event::ArrowRight);
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_GT(d.rawHScroll, 0u);
+    EXPECT_EQ(d.filtHScroll, 0u);
+
+    // Switch to filtered pane and scroll right
+    key(ftxui::Event::Tab);
+    key(ftxui::Event::ArrowRight);
+    d = ctrl_.getViewData(5, 5);
+    EXPECT_GT(d.filtHScroll, 0u);
+    // Raw pane hScroll should be unchanged
+    EXPECT_GT(d.rawHScroll, 0u);
+}
+
+// ── scrollPane / setFocus API ─────────────────────────────────────────────────
+
+TEST_F(NavigationTest, ScrollPaneDoesNotChangeFocus) {
+    // Default focus is raw; scrollPane on filtered must not change focus
+    ctrl_.scrollPane(FocusArea::Filtered, 1);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).rawFocused);
+}
+
+TEST_F(NavigationTest, SetFocusSwitchesToFilteredPane) {
+    ctrl_.setFocus(FocusArea::Filtered);
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_FALSE(d.rawFocused);
+    EXPECT_TRUE(d.filteredFocused);
+}
+
+TEST_F(NavigationTest, SetFocusRoundTrip) {
+    ctrl_.setFocus(FocusArea::Filtered);
+    ctrl_.setFocus(FocusArea::Raw);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).rawFocused);
+}

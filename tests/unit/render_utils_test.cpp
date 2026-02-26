@@ -168,3 +168,43 @@ TEST(RenderColoredLine, MultipleSearchSpansAllVisible) {
     auto e = renderColoredLine("apple pie apple", {}, ss);
     EXPECT_NO_THROW(renderLine(e, 30));
 }
+
+// ── hOffset (horizontal scroll) ───────────────────────────────────────────────
+
+TEST(RenderColoredLine, HOffsetZeroShowsFullContent) {
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 0);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, HOffsetShiftsContentLeft) {
+    // hOffset=6 skips "hello " — only "world" should be visible
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 6);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("world"), std::string::npos);
+    EXPECT_EQ(s.find("hello "), std::string::npos);
+}
+
+TEST(RenderColoredLine, HOffsetBeyondContentRendersEmpty) {
+    // Offset past end of content should not crash and render nothing visible
+    auto e = renderColoredLine("hi", {}, {}, false, 0, 100);
+    EXPECT_NO_THROW(renderLine(e, 20));
+}
+
+TEST(RenderColoredLine, HOffsetAdjustsColorSpan) {
+    // ColorSpan covers "world" (bytes 6-11); with hOffset=6 the span maps to [0,5)
+    std::vector<ColorSpan> cs = {{ 6, 11, "#FF5555" }};
+    auto e = renderColoredLine("hello world", cs, {}, false, 0, 6);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, HOffsetDropsSpanBeforeOffset) {
+    // ColorSpan covers "hello" (bytes 0-5); with hOffset=6 that span is dropped
+    std::vector<ColorSpan> cs = {{ 0, 5, "#FF5555" }};
+    auto e = renderColoredLine("hello world", cs, {}, false, 0, 6);
+    // Should not crash; "world" should still be visible
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}

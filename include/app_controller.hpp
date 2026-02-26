@@ -32,8 +32,9 @@ enum class InputMode {
 // ── State and view structures ──────────────────────────────────────────────────
 
 struct PaneState {
-    size_t cursor       = 0;
-    size_t scrollOffset = 0;
+    size_t cursor        = 0;
+    size_t scrollOffset  = 0;
+    size_t hScrollOffset = 0;   // horizontal byte offset (for wide-line viewing)
 };
 
 struct LogLine {
@@ -60,6 +61,8 @@ struct ViewData {
     bool                 rawFocused      = true;
     std::vector<LogLine> filteredPane;
     bool                 filteredFocused = false;
+    size_t               rawHScroll      = 0;   // horizontal scroll offset for raw pane
+    size_t               filtHScroll     = 0;   // horizontal scroll offset for filtered pane
 
     // ── Filter bar ────────────────────────────────────────────────────────────
     struct FilterTag {
@@ -127,6 +130,13 @@ public:
     // or file reset in the UI thread.
     void handleNewLines(size_t firstLine, size_t lastLine);
     void handleFileReset();
+
+    // Scroll a specific pane by delta rows without changing the active focus.
+    // Positive delta = scroll down, negative = scroll up.
+    void scrollPane(FocusArea area, int delta);
+
+    // Switch the active focus to the given pane.
+    void setFocus(FocusArea area);
 
 private:
     ILogReader&   reader_;

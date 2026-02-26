@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.2（搜索增强 + 过滤器字符串/正则模式切换）
-> 测试：247 个，全部通过
+> 版本：v0.9.3（鼠标支持 + 水平滚动）
+> 测试：259 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -194,9 +194,13 @@ None ─────────────────────────
 
 **PaneState**：
 ```cpp
-struct PaneState { size_t cursor = 0; size_t scrollOffset = 0; };
+struct PaneState {
+    size_t cursor        = 0;
+    size_t scrollOffset  = 0;
+    size_t hScrollOffset = 0;   // v0.9.3: horizontal byte offset
+};
 ```
-每个窗格（Raw / Filtered）各一份，`clampScroll()` 在 `getViewData()` 时约束到合法范围。
+每个窗格（Raw / Filtered）各一份，`clampScroll()` 在 `getViewData()` 时约束垂直范围；hScrollOffset 无上限（超范围时渲染返回空行）。
 
 **getViewData() 职责**：
 1. 计算可见行切片（`[scrollOffset, scrollOffset + paneHeight)`）
@@ -219,6 +223,17 @@ struct PaneState { size_t cursor = 0; size_t scrollOffset = 0; };
 - 焦点在原始区时：`runSearch()` 扫描全量原始行（原有行为）
 - 焦点在过滤区时：只扫描 `chain_.filteredLineAt(i)` 返回的行集合
 - `jumpToSearchResult()` 同样感知：`searchInFiltered_=true` 时线性扫描过滤列表定位 cursor
+
+**v0.9.3 新增公有方法**：
+- `scrollPane(FocusArea area, int delta)`：滚动指定窗格（不改变焦点），由 render.cpp CatchEvent 的鼠标滚轮处理调用
+- `setFocus(FocusArea area)`：切换焦点，由 render.cpp CatchEvent 的鼠标单击处理调用
+
+**鼠标支持**（v0.9.3）：
+- FTXUI v6 默认启用鼠标跟踪（`track_mouse_ = true`），无需显式开启
+- `CatchEvent` lambda 检测 `event.is_mouse()`：按窗格 Y 边界判断悬停位置
+  - `WheelUp`/`WheelDown`：调用 `scrollPane` 滚动悬停窗格（±3 行/次），不影响另一窗格
+  - `Left + Pressed`：调用 `setFocus` 切换到点击窗格
+- 布局行号（0-based）：status(0) + sep(1) + rawPane(2..1+rawH) + sep(2+rawH) + filtPane(3+rawH..2+rawH+filtH)
 
 ### 3.5 渲染层
 

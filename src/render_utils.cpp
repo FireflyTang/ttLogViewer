@@ -47,7 +47,34 @@ Element renderColoredLine(std::string_view content,
                            const std::vector<ColorSpan>& spans,
                            const std::vector<SearchSpan>& searchSpans,
                            bool folded,
-                           int terminalWidth) {
+                           int terminalWidth,
+                           size_t hOffset) {
+    // Horizontal scroll: shift content and spans by hOffset bytes (UTF-8 safe).
+    // Folded lines are not shifted (the fold truncation already implies short content).
+    if (hOffset > 0 && !folded) {
+        // Advance hOffset to the next UTF-8 codepoint boundary if needed
+        while (hOffset < content.size() && !isUtf8Boundary(content, hOffset))
+            ++hOffset;
+        if (hOffset >= content.size())
+            return text("");
+        content = content.substr(hOffset);
+        // Shift ColorSpans: drop those that end at or before the offset
+        std::vector<ColorSpan> shifted;
+        for (const auto& s : spans) {
+            if (s.end <= hOffset) continue;
+            shifted.push_back({s.start > hOffset ? s.start - hOffset : 0,
+                               s.end - hOffset, s.color});
+        }
+        // Shift SearchSpans similarly
+        std::vector<SearchSpan> shiftedSS;
+        for (const auto& s : searchSpans) {
+            if (s.end <= hOffset) continue;
+            shiftedSS.push_back({s.start > hOffset ? s.start - hOffset : 0,
+                                 s.end - hOffset});
+        }
+        return renderColoredLine(content, shifted, shiftedSS, folded, terminalWidth, 0);
+    }
+
     // Folded mode: truncate content and append "…" (no spans applied)
     if (folded && terminalWidth > 2) {
         size_t maxBytes = static_cast<size_t>(terminalWidth - 2);

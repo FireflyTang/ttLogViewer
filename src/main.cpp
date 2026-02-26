@@ -37,6 +37,7 @@ int main(int argc, char* argv[]) {
     AppController controller(reader, chain);
 
     // Create screen before injecting PostFn so the lambda captures a valid ref
+    // Note: FTXUI v6 has mouse tracking enabled by default (track_mouse_ = true).
     auto screen = ftxui::ScreenInteractive::TerminalOutput();
 
     // Inject async post function so background threads can safely notify UI
