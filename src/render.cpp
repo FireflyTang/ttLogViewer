@@ -2,6 +2,7 @@
 #include "render_utils.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <format>
 #include <string>
 
@@ -133,16 +134,33 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element dot = tag.enabled
             ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
             : Element(text("○ ") | color(parseHexColor(tag.color)));
-        // Combine label + dot into one element so selection highlight covers both.
-        Element row = hbox({ text(std::move(label)), std::move(dot) });
-        if (tag.selected) row = row | inverted;
+        // Invert only the label text on selection; keep the dot its original color.
+        Element labelEl = text(std::move(label));
+        if (tag.selected) labelEl = labelEl | inverted;
+        Element row = hbox({ std::move(labelEl), std::move(dot) });
         if (!tag.enabled) row = row | dim;
         items.push_back(std::move(row));
     }
     return hbox(std::move(items));
 }
 
-static Element renderInputLine(const ViewData& data) {
+// Always-visible bottom hints row.
+static Element renderHintsLine(const ViewData& data) {
+    if (!data.mouseTracking) {
+        return hbox({ text(" [选文模式]") | color(Color::Yellow),
+                      text("  m:退出选文  ↑↓:移动  Tab:切换区域") | dim });
+    }
+    const bool inputActive = (data.inputMode == InputMode::Search
+                           || data.inputMode == InputMode::FilterAdd
+                           || data.inputMode == InputMode::FilterEdit);
+    if (inputActive) {
+        return text(" Esc:取消  Enter:确认  Tab:正则") | dim;
+    }
+    return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
+}
+
+// Active input row — shown only when input/search is active.
+static Element renderActiveInput(const ViewData& data) {
     switch (data.inputMode) {
         case InputMode::None:
             if (!data.searchKeyword.empty()) {
@@ -153,28 +171,30 @@ static Element renderInputLine(const ViewData& data) {
                               text(data.searchKeyword) | bold,
                               text("  (" + cnt + ")  n/p:跳转  Esc:清除") | dim });
             }
-            return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
+            return text("");
 
         case InputMode::Search: {
             std::string modeTag = data.inputUseRegex ? " [正则]" : " [字符串]";
-            Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
-            return hbox({ text(modeTag) | dim,
-                          text("  "),
-                          text(data.inputBuffer) | bold,
-                          std::move(dot),
-                          text("  Tab:正则") | dim });
+            if (data.inputUseRegex) {
+                Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
+                return hbox({ text(modeTag) | dim, text("  "),
+                              text(data.inputBuffer) | bold, std::move(dot) });
+            }
+            return hbox({ text(modeTag) | dim, text("  "),
+                          text(data.inputBuffer) | bold });
         }
 
         case InputMode::FilterAdd:
         case InputMode::FilterEdit: {
             std::string modeTag = data.inputUseRegex ? " [正则]" : " [字符串]";
-            Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
-            return hbox({ text(modeTag) | dim,
-                          text("  "),
-                          text(data.inputPrompt),
-                          text(data.inputBuffer) | bold,
-                          std::move(dot),
-                          text("  Tab:正则") | dim });
+            if (data.inputUseRegex) {
+                Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
+                return hbox({ text(modeTag) | dim, text("  "),
+                              text(data.inputPrompt), text(data.inputBuffer) | bold,
+                              std::move(dot) });
+            }
+            return hbox({ text(modeTag) | dim, text("  "),
+                          text(data.inputPrompt), text(data.inputBuffer) | bold });
         }
 
         case InputMode::GotoLine:
@@ -238,7 +258,11 @@ Component CreateMainComponent(AppController& controller,
 
         ViewData data = controller.getViewData(rawH, filtH);
 
-        Element layout = vbox({
+        // Build layout: hints row is always visible; active-input row appears only
+        // when an input mode is active or a search keyword is set.
+        const bool inputRowActive = (data.inputMode != InputMode::None
+                                  || !data.searchKeyword.empty());
+        Elements elems = {
             renderStatusBar(data),
             separator(),
             renderLogPane(data.rawPane, data.rawFocused,
@@ -252,9 +276,11 @@ Component CreateMainComponent(AppController& controller,
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),
-            renderInputLine(data),
-        });
+        };
+        if (inputRowActive) elems.push_back(renderActiveInput(data));
+        elems.push_back(renderHintsLine(data));
 
+        Element layout = vbox(std::move(elems));
         layout = renderDialogOverlay(data, layout);
         layout = renderProgressOverlay(data, layout);
 
@@ -271,6 +297,7 @@ Component CreateMainComponent(AppController& controller,
             controller.requestQuit(screen.ExitLoopClosure());
             return true;
         }
+
         // Update heights on every event to pick up terminal resize
         {
             auto [dimx, dimy] = Terminal::Size();
@@ -278,7 +305,9 @@ Component CreateMainComponent(AppController& controller,
         }
 
         // Mouse events: wheel scroll and click-to-focus
+        // Skipped when mouse tracking is disabled (text-selection mode)
         if (event.is_mouse()) {
+            if (!controller.isMouseTracking()) return false;
             const auto& m     = event.mouse();
             const int   rawH  = controller.rawPaneHeight();
             const int   filtH = controller.filtPaneHeight();
@@ -298,23 +327,36 @@ Component CreateMainComponent(AppController& controller,
             const bool overFilt = (m.y >= filtTop && m.y <= filtBot);
 
             if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
+                if (m.control) return false;  // pass Ctrl+scroll to terminal (font resize)
                 const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
-                if (overRaw)
-                    controller.scrollPane(FocusArea::Raw,      dir);
-                else if (overFilt)
-                    controller.scrollPane(FocusArea::Filtered, dir);
+                // Scroll the focused pane, not the pane under the mouse cursor.
+                controller.scrollPane(controller.focusArea(), dir);
                 return true;
             }
             if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
-                if (overRaw)
+                if (overRaw) {
                     controller.setFocus(FocusArea::Raw);
-                else if (overFilt)
+                    controller.clickLine(FocusArea::Raw, m.y - rawTop);
+                } else if (overFilt) {
                     controller.setFocus(FocusArea::Filtered);
+                    controller.clickLine(FocusArea::Filtered, m.y - filtTop);
+                }
                 return true;
             }
             return false;
         }
 
-        return controller.handleKey(event);
+        // Dispatch to controller; write ANSI mouse-mode sequences if tracking toggled.
+        const bool prevMouseTracking = controller.isMouseTracking();
+        const bool consumed          = controller.handleKey(event);
+        if (controller.isMouseTracking() != prevMouseTracking) {
+            if (controller.isMouseTracking()) {
+                fputs("\033[?1000h\033[?1003h\033[?1015h\033[?1006h", stdout);
+            } else {
+                fputs("\033[?1000l\033[?1003l\033[?1015l\033[?1006l", stdout);
+            }
+            fflush(stdout);
+        }
+        return consumed;
     });
 }

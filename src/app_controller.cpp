@@ -41,6 +41,8 @@ static constexpr std::string_view kHelpText =
     "l: 行号显示切换\n"
     "z: 折叠/展开超长行\n"
     "w: 导出过滤结果\n"
+    "m: 切换鼠标选择模式\n"
+    "x: 跳转原始行（过滤窗格中）\n"
     "h: 帮助\n"
     "q: 退出";
 
@@ -287,6 +289,16 @@ bool AppController::handleFilterKeys(const Event& event) {
         }
         return true;
     }
+    if (event == Event::Character('x')) {
+        if (focus_ == FocusArea::Filtered) {
+            const size_t total = chain_.filteredLineCount();
+            if (filteredState_.cursor < total) {
+                const size_t rawNo = chain_.filteredLineAt(filteredState_.cursor);
+                jumpToRawLine(rawNo);
+            }
+        }
+        return true;
+    }
     return false;
 }
 
@@ -355,6 +367,10 @@ bool AppController::handleModeKeys(const Event& event) {
         dialogTitle_     = std::string("ttLogViewer v") + TTLOGVIEWER_VERSION + "  帮助";
         dialogBody_      = std::string(kHelpText);
         dialogHasChoice_ = false;
+        return true;
+    }
+    if (event == Event::Character('m')) {
+        toggleMouseTracking();
         return true;
     }
     if (event == Event::Character('w')) {
@@ -665,6 +681,11 @@ void AppController::buildRawPane(ViewData& data) {
     const size_t first = rawState_.scrollOffset;
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
+    // Only highlight the keyword on the current search result line (not every match).
+    const size_t currentResultRawLine =
+        (!searchKeyword_.empty() && !searchResults_.empty())
+        ? searchResults_[searchIndex_] : 0;
+
     data.rawPane.reserve(count);
     size_t maxContentLen = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -673,8 +694,9 @@ void AppController::buildRawPane(ViewData& data) {
         ll.rawLineNo   = lineNo;
         ll.content     = reader_.getLine(lineNo);
         ll.colors      = {};   // raw pane does not show filter match colors
-        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_,
-                                            searchUseRegex_, searchRegex_);
+        ll.searchSpans = (lineNo == currentResultRawLine)
+            ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
+            : std::vector<SearchSpan>{};
         ll.highlighted = (first + i == rawState_.cursor);
         ll.folded      = (foldedLines_.count(lineNo) > 0);
         maxContentLen  = std::max(maxContentLen, ll.content.size());
@@ -696,6 +718,11 @@ void AppController::buildFilteredPane(ViewData& data) {
     const size_t first = filteredState_.scrollOffset;
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
+    // Only highlight the keyword on the current search result line (not every match).
+    const size_t currentResultRawLine =
+        (!searchKeyword_.empty() && !searchResults_.empty())
+        ? searchResults_[searchIndex_] : 0;
+
     data.filteredPane.reserve(count);
     size_t maxContentLenFilt = 0;
     for (size_t i = 0; i < count; ++i) {
@@ -704,8 +731,9 @@ void AppController::buildFilteredPane(ViewData& data) {
         ll.rawLineNo   = rawLineNo;
         ll.content     = reader_.getLine(rawLineNo);
         ll.colors      = chain_.computeColors(rawLineNo, ll.content);
-        ll.searchSpans = computeSearchSpans(ll.content, searchKeyword_,
-                                            searchUseRegex_, searchRegex_);
+        ll.searchSpans = (rawLineNo == currentResultRawLine)
+            ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
+            : std::vector<SearchSpan>{};
         ll.highlighted = (first + i == filteredState_.cursor);
         ll.folded      = (foldedLines_.count(rawLineNo) > 0);
         maxContentLenFilt = std::max(maxContentLenFilt, ll.content.size());
@@ -757,6 +785,7 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.searchResultIndex = searchResults_.empty() ? 0 : searchIndex_ + 1;
     data.searchActive      = !searchKeyword_.empty();
     data.searchUseRegex    = searchUseRegex_;
+    data.mouseTracking     = mouseTracking_;
 
     buildRawPane(data);
     buildFilteredPane(data);
@@ -783,14 +812,21 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
 // ── Resize ────────────────────────────────────────────────────────────────────
 
 void AppController::onTerminalResize(int width, int height) {
-    if (width > 0) lastTerminalWidth_ = width;
-    const int overhead  = AppConfig::global().uiOverheadRows;
-    const int available = std::max(2, height - overhead);
-    lastRawPaneHeight_      = static_cast<int>(available * AppConfig::global().rawPaneFraction);
-    lastFilteredPaneHeight_ = available - lastRawPaneHeight_;
-
+    if (width  > 0) lastTerminalWidth_  = width;
+    if (height > 0) lastTerminalHeight_ = height;
+    recomputePaneHeights();
     clampScroll(rawState_,      reader_.lineCount(),        lastRawPaneHeight_);
     clampScroll(filteredState_, chain_.filteredLineCount(), lastFilteredPaneHeight_);
+}
+
+void AppController::recomputePaneHeights() {
+    if (lastTerminalHeight_ <= 0) return;   // not yet set (test environment)
+    const int extra = (inputMode_ != InputMode::None || !searchKeyword_.empty()) ? 1 : 0;
+    const int avail = std::max(2, lastTerminalHeight_
+                                    - AppConfig::global().uiOverheadRows - extra);
+    const int rawH  = static_cast<int>(avail * AppConfig::global().rawPaneFraction);
+    lastRawPaneHeight_      = std::max(1, rawH);
+    lastFilteredPaneHeight_ = std::max(1, avail - rawH);
 }
 
 bool AppController::isInputActive() const {
@@ -812,6 +848,7 @@ void AppController::enterInputMode(InputMode mode, std::string prompt,
     inputValid_  = (mode == InputMode::FilterEdit && !inputBuffer_.empty());
     if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit)
         validateInputRegex();
+    recomputePaneHeights();
 }
 
 void AppController::exitInputMode() {
@@ -819,6 +856,7 @@ void AppController::exitInputMode() {
     inputBuffer_.clear();
     inputPrompt_.clear();
     inputValid_  = false;
+    recomputePaneHeights();
 }
 
 void AppController::validateInputRegex() {
@@ -930,6 +968,9 @@ void AppController::triggerReprocess(size_t fromFilter) {
             showProgress_          = false;
             progress_              = 1.0;
             reprocessTimeoutShown_ = false;
+            // Force a redraw on Windows where postFn tasks may not trigger Draw()
+            // immediately (event loop may block on ReadConsoleInputW after a task).
+            if (postFn_) postFn_([] {});
         });
 }
 
@@ -944,6 +985,9 @@ void AppController::requestQuit(std::function<void()> exitFn) {
 }
 
 bool AppController::isDialogOpen() const { return showDialog_; }
+
+void AppController::toggleMouseTracking() { mouseTracking_ = !mouseTracking_; }
+bool AppController::isMouseTracking() const { return mouseTracking_; }
 
 void AppController::showErrorDialog(std::string title, std::string body) {
     showDialog_      = true;
@@ -1019,6 +1063,7 @@ void AppController::runSearch(const std::string& keyword) {
         searchIndex_ = 0;
         jumpToSearchResult(0);
     }
+    recomputePaneHeights();
 }
 
 void AppController::jumpToSearchResult(size_t idx) {
@@ -1049,6 +1094,7 @@ void AppController::clearSearch() {
     searchKeyword_.clear();
     searchInFiltered_ = false;
     searchRegex_.reset();
+    recomputePaneHeights();
 }
 
 // ── stepSearch ────────────────────────────────────────────────────────────────
@@ -1123,4 +1169,16 @@ void AppController::scrollPane(FocusArea area, int delta) {
 
 void AppController::setFocus(FocusArea area) {
     focus_ = area;
+}
+
+FocusArea AppController::focusArea() const { return focus_; }
+
+void AppController::clickLine(FocusArea area, int rowInPane) {
+    if (rowInPane < 0) return;
+    PaneState&   ps    = (area == FocusArea::Raw) ? rawState_ : filteredState_;
+    const int    ph    = (area == FocusArea::Raw) ? lastRawPaneHeight_ : lastFilteredPaneHeight_;
+    const size_t total = (area == FocusArea::Raw) ? reader_.lineCount() : chain_.filteredLineCount();
+    if (total == 0) return;
+    ps.cursor = std::min(ps.scrollOffset + static_cast<size_t>(rowInPane), total - 1);
+    clampScroll(ps, total, ph);
 }

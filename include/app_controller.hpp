@@ -103,6 +103,9 @@ struct ViewData {
     size_t      searchResultIndex = 0;  // 1-based current result position
     bool        searchActive      = false;  // true while a search keyword is set
     bool        searchUseRegex    = false;  // current search mode (regex or literal)
+
+    // ── Mouse tracking ────────────────────────────────────────────────────────
+    bool        mouseTracking     = true;   // false = text-selection mode
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -149,12 +152,22 @@ public:
     // Switch the active focus to the given pane.
     void setFocus(FocusArea area);
 
+    // Returns the currently focused pane.
+    FocusArea focusArea() const;
+
+    // Move the cursor in a pane to the clicked row (0-based offset within pane).
+    void clickLine(FocusArea area, int rowInPane);
+
     // Show a Y/N quit confirmation dialog.  exitFn is called when the user
     // confirms.  No-op if a dialog is already open.
     void requestQuit(std::function<void()> exitFn);
 
     // Returns true when a modal dialog (info or choice) is currently visible.
     bool isDialogOpen() const;
+
+    // Toggle FTXUI mouse tracking on/off (allows native text selection when off).
+    void toggleMouseTracking();
+    bool isMouseTracking() const;
 
 private:
     ILogReader&   reader_;
@@ -205,10 +218,14 @@ private:
     std::chrono::steady_clock::time_point reprocessStartTime_;
     bool reprocessTimeoutShown_ = false;
 
+    // ── Mouse tracking ────────────────────────────────────────────────────────
+    bool mouseTracking_ = true;   // false = text-selection mode (mouse events passed through)
+
     // ── Display state ─────────────────────────────────────────────────────────
     bool                       showLineNumbers_ = true;
     std::unordered_set<size_t> foldedLines_;       // rawLineNo values that are folded
-    int                        lastTerminalWidth_ = 80;
+    int                        lastTerminalWidth_  = 80;
+    int                        lastTerminalHeight_ = 0;   // 0 = not yet set (tests)
     std::string                exportPath_;        // Generated on 'w' press
 
     // Cached pane heights for rendering. Marked mutable because getViewData()
@@ -226,6 +243,10 @@ private:
     void moveCursor(int delta, int paneHeight);
     void clampScroll(PaneState& ps, size_t totalLines, int paneHeight);
     void jumpToRawLine(size_t rawLineNo);  // Jump raw pane to a specific line
+
+    // Recompute pane heights from lastTerminalHeight_, accounting for the extra
+    // input row when input mode is active.  No-op when lastTerminalHeight_ == 0.
+    void recomputePaneHeights();
 
     // ── Key dispatch ─────────────────────────────────────────────────────────
     bool handleKeyNone(const ftxui::Event& event);

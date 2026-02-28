@@ -317,6 +317,33 @@ TEST_F(NavigationTest, PaneHeightRatio6to4SmallTerminal) {
     EXPECT_EQ(ctrl_.filtPaneHeight(), 4);
 }
 
+// ── Mouse tracking toggle (text-selection mode) ───────────────────────────────
+
+TEST_F(NavigationTest, MouseTrackingEnabledByDefault) {
+    EXPECT_TRUE(ctrl_.isMouseTracking());
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).mouseTracking);
+}
+
+TEST_F(NavigationTest, MKeyTogglesMouseTracking) {
+    // First press disables mouse tracking
+    key(ftxui::Event::Character('m'));
+    EXPECT_FALSE(ctrl_.isMouseTracking());
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).mouseTracking);
+
+    // Second press re-enables
+    key(ftxui::Event::Character('m'));
+    EXPECT_TRUE(ctrl_.isMouseTracking());
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).mouseTracking);
+}
+
+TEST_F(NavigationTest, MKeyInInputModeIsTyped) {
+    // 'm' in filter-add input should go to the input buffer, not toggle mouse
+    key(ftxui::Event::Character('a'));   // enter FilterAdd
+    key(ftxui::Event::Character('m'));   // typed into buffer
+    EXPECT_TRUE(ctrl_.isMouseTracking());  // tracking unchanged
+    EXPECT_EQ(ctrl_.getViewData(5, 5).inputBuffer, "m");
+}
+
 // ── Feature #6: ESC cancels reprocess when progress is shown ─────────────────
 
 // Fixture that uses MockFilterChain so reprocess() never calls onDone,
@@ -369,4 +396,79 @@ TEST_F(EscCancelReprocessTest, EscDuringProgressCancelsReprocess) {
     key(ftxui::Event::Escape);
     EXPECT_FALSE(ctrl_.getViewData(5, 5).showProgress);
     // cancelReprocess() expectation is verified by GoogleMock on TearDown
+}
+
+// ── Dynamic bottom row: input/search active shrinks available pane height ─────
+
+TEST_F(NavigationTest, DynamicBottomRow_InputModeShrinksPaneHeight) {
+    // Without input: available = 26 - 6 = 20, raw = int(20 * 0.6) = 12
+    ctrl_.onTerminalResize(80, 26);
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 12);
+
+    // Enter FilterAdd (input mode active): extra = 1, available = 19
+    // raw = int(19 * 0.6) = 11
+    key(ftxui::Event::Character('a'));
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 11);
+
+    // Exit input mode: heights restored to no-extra layout
+    key(ftxui::Event::Escape);
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 12);
+}
+
+TEST_F(NavigationTest, DynamicBottomRow_SearchKeywordShrinksPaneHeight) {
+    ctrl_.onTerminalResize(80, 26);
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 12);
+
+    // Commit a search: searchKeyword_ becomes non-empty → active row appears
+    key(ftxui::Event::Character('/'));
+    for (char c : std::string("line1")) key(ftxui::Event::Character(c));
+    key(ftxui::Event::Return);
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 11);
+
+    // ESC in None mode clears search keyword → heights restored
+    key(ftxui::Event::Escape);
+    EXPECT_EQ(ctrl_.rawPaneHeight(), 12);
+}
+
+// ── clickLine: moves cursor in the pane ──────────────────────────────────────
+
+TEST_F(NavigationTest, ClickLineMovesRawCursor) {
+    // Raw pane starts at cursor=0 (rawLine 1), scrollOffset=0.
+    // Clicking row 3 (0-based within pane) → cursor = scrollOffset + 3 = 3 → rawLine 4.
+    ctrl_.clickLine(FocusArea::Raw, 3);
+    EXPECT_EQ(highlightedLine(), 4u);
+}
+
+TEST_F(NavigationTest, ClickLineClampedToLastLine) {
+    // Requesting a row beyond the last line must clamp to the last line.
+    ctrl_.clickLine(FocusArea::Raw, 999);
+    EXPECT_EQ(highlightedLine(), 20u);
+}
+
+// ── 'x' key in filtered pane jumps raw pane cursor to the raw line ───────────
+
+TEST_F(NavigationTest, XKeyInFilteredPaneJumpsToRawLine) {
+    // Add filter "line5": matches rawLine 5 ("line5") and rawLine 15 ("line15").
+    key(ftxui::Event::Character('a'));
+    for (char c : std::string("line5")) key(ftxui::Event::Character(c));
+    key(ftxui::Event::Return);
+    // Wait for the background reprocess thread to finish before asserting.
+    chain_.waitReprocess();
+
+    // Switch focus to filtered pane; cursor=0 → filteredLineAt(0) = rawLine 5.
+    key(ftxui::Event::Tab);
+
+    // 'x' must jump the raw pane cursor to that raw line without changing focus.
+    key(ftxui::Event::Character('x'));
+
+    // highlightedLine() reads rawPane — cursor should now be at rawLine 5.
+    EXPECT_EQ(highlightedLine(), 5u);
+}
+
+TEST_F(NavigationTest, XKeyInRawPaneIsNoOp) {
+    // 'x' while focused on the raw pane must not crash or change state.
+    // Focus starts on Raw by default.
+    const size_t lineBefore = highlightedLine();
+    key(ftxui::Event::Character('x'));
+    EXPECT_EQ(highlightedLine(), lineBefore);
 }
