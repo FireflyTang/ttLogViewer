@@ -86,6 +86,7 @@ struct ViewData {
     std::string inputBuffer;
     bool        inputValid    = false;
     bool        inputUseRegex = false;  // regex mode for the active input (filter or search)
+    bool        inputExclude  = false;  // exclude mode for filter add/edit (Ctrl+R toggle)
 
     // ── Dialog overlay ────────────────────────────────────────────────────────
     bool        showDialog      = false;
@@ -185,6 +186,7 @@ private:
     std::string inputPrompt_;
     bool        inputValid_         = false;
     bool        filterInputUseRegex_ = false;  // local regex mode during filter add/edit
+    bool        filterInputExclude_  = false;  // local exclude mode during filter add/edit
 
     // ── Filter selection ──────────────────────────────────────────────────────
     size_t selectedFilter_  = 0;

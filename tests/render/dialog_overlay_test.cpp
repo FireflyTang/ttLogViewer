@@ -19,7 +19,8 @@ TEST_F(DialogOverlayTest, InvalidRegexShowsDialog) {
     key(E::Return);
     chain_.waitReprocess();
     key(E::Character('e'));   // Enter FilterEdit (buffer pre-filled with "ERROR")
-    key(E::Tab);              // Toggle to regex mode
+    key(E::Tab);              // Tab once  → str-exclude
+    key(E::Tab);              // Tab twice → regex-include
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);           // Triggers "无效正则" dialog
@@ -36,7 +37,8 @@ TEST_F(DialogOverlayTest, AnyKeyClosesInfoDialog) {
     key(E::Return);
     chain_.waitReprocess();
     key(E::Character('e'));   // Enter FilterEdit
-    key(E::Tab);              // Toggle to regex mode
+    key(E::Tab);              // Tab once  → str-exclude
+    key(E::Tab);              // Tab twice → regex-include
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);
@@ -53,7 +55,8 @@ TEST_F(DialogOverlayTest, DialogTitleBodyRendered) {
     key(E::Return);
     chain_.waitReprocess();
     key(E::Character('e'));   // Enter FilterEdit
-    key(E::Tab);              // Toggle to regex mode
+    key(E::Tab);              // Tab once  → str-exclude
+    key(E::Tab);              // Tab twice → regex-include
     for (int i = 0; i < 5; ++i) key(E::Backspace);
     for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
     key(E::Return);

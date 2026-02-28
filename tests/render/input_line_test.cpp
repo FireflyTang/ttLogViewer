@@ -18,10 +18,11 @@ TEST_F(InputLineTest, FilterAddShowsPrompt) {
 
 TEST_F(InputLineTest, FilterAddTabShowsRegexTag) {
     key(ftxui::Event::Character('a'));
-    key(ftxui::Event::Tab);  // toggle to regex mode
+    key(ftxui::Event::Tab);  // Tab once → str-exclude
+    key(ftxui::Event::Tab);  // Tab twice → regex-include
     std::string out = renderCtrl();
     EXPECT_NE(out.find("\xe6\xad\xa3\xe5\x88\x99"), std::string::npos)
-        << "Expected '正则' mode tag after Tab in filter add";
+        << "Expected '正则' mode tag after two Tabs in filter add";
 }
 
 TEST_F(InputLineTest, FilterAddTypingAppearsInBuffer) {

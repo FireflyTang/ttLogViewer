@@ -56,14 +56,23 @@ TEST_F(InputFlowTest, AddFilterFullFlow) {
 
 TEST_F(InputFlowTest, AddFilterTabTogglesRegex) {
     key(ftxui::Event::Character('a'));
-    EXPECT_FALSE(data().inputUseRegex);  // default: string mode
-    // Tab toggles regex mode; inputBuffer should remain empty
+    EXPECT_FALSE(data().inputUseRegex);  // default: str-include mode
+    EXPECT_FALSE(data().inputExclude);
+    // Tab cycles: str-include → str-exclude → regex-include → regex-exclude → str-include
     key(ftxui::Event::Tab);
-    EXPECT_TRUE(data().inputUseRegex);   // now regex mode
+    EXPECT_FALSE(data().inputUseRegex);  // str-exclude
+    EXPECT_TRUE(data().inputExclude);
     EXPECT_EQ(data().inputBuffer, "");   // buffer unchanged
     EXPECT_TRUE(ctrl_.isInputActive());
     key(ftxui::Event::Tab);
-    EXPECT_FALSE(data().inputUseRegex);  // toggled back to string mode
+    EXPECT_TRUE(data().inputUseRegex);   // regex-include
+    EXPECT_FALSE(data().inputExclude);
+    key(ftxui::Event::Tab);
+    EXPECT_TRUE(data().inputUseRegex);   // regex-exclude
+    EXPECT_TRUE(data().inputExclude);
+    key(ftxui::Event::Tab);
+    EXPECT_FALSE(data().inputUseRegex);  // back to str-include
+    EXPECT_FALSE(data().inputExclude);
 }
 
 TEST_F(InputFlowTest, AddFilterXTypedIntoBuffer) {
@@ -91,14 +100,15 @@ TEST_F(InputFlowTest, AddFilterStringModeAnyPatternValid) {
 }
 
 TEST_F(InputFlowTest, EditFilterRegexModeInvalidPatternInvalid) {
-    // Add a filter, enter edit mode, toggle to regex via Tab, type an invalid regex.
+    // Add a filter, enter edit mode, cycle to regex-include via Tab×2, type an invalid regex.
     // In regex mode, invalid patterns should make inputValid=false.
     key(ftxui::Event::Character('a'));
     type("ERROR");
     key(ftxui::Event::Return);
     chain_.waitReprocess();
     key(ftxui::Event::Character('e'));  // Enter edit mode
-    key(ftxui::Event::Tab);             // Toggle to regex mode
+    key(ftxui::Event::Tab);             // Tab once  → str-exclude
+    key(ftxui::Event::Tab);             // Tab twice → regex-include
     // Clear "ERROR" and type an invalid regex
     for (int i = 0; i < 5; ++i) key(ftxui::Event::Backspace);
     type("[invalid");

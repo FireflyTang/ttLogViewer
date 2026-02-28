@@ -126,10 +126,13 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
     Elements items;
     items.reserve(tags.size());
     for (const auto& tag : tags) {
-        // Format: " [1:pattern](N)" or " [1R:pattern](N)" — no trailing space,
-        // the dot follows immediately so there is no gap between count and dot.
-        std::string label = std::format(" [{}{}:{}]({})",
-            tag.number, tag.useRegex ? "R" : "", tag.pattern, tag.matchCount);
+        // Format: " [1:pattern](N)", " [1R:pattern](N)", " [1!:pattern](N)", etc.
+        // R = regex, ! = exclude; combined: "R!" = regex+exclude.
+        std::string label = std::format(" [{}{}{}:{}]({})",
+            tag.number,
+            tag.useRegex ? "R" : "",
+            tag.exclude  ? "!" : "",
+            tag.pattern, tag.matchCount);
         // ⬤ (U+2B24) is a larger filled circle than ●; ○ stays for disabled state.
         Element dot = tag.enabled
             ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
@@ -153,10 +156,13 @@ static Element renderHintsLine(const ViewData& data) {
         return hbox({ text(" [选文模式]") | color(Color::Yellow),
                       text("  m:退出选文  ↑↓:移动  Tab:切换区域") | dim });
     }
-    const bool inputActive = (data.inputMode == InputMode::Search
-                           || data.inputMode == InputMode::FilterAdd
-                           || data.inputMode == InputMode::FilterEdit);
-    if (inputActive) {
+    const bool filterInputActive = (data.inputMode == InputMode::FilterAdd
+                                 || data.inputMode == InputMode::FilterEdit);
+    const bool searchInputActive = (data.inputMode == InputMode::Search);
+    if (filterInputActive) {
+        return text(" Esc:取消  Enter:确认  Tab:切换模式") | dim;
+    }
+    if (searchInputActive) {
         return text(" Esc:取消  Enter:确认  Tab:正则") | dim;
     }
     return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
@@ -189,14 +195,22 @@ static Element renderActiveInput(const ViewData& data) {
 
         case InputMode::FilterAdd:
         case InputMode::FilterEdit: {
-            std::string modeTag = data.inputUseRegex ? " [正则]" : " [字符串]";
+            // Build 4-mode tag: str-include, str-exclude (yellow), regex-include, regex-exclude (yellow)
+            std::string modeStr;
+            bool        modeIsExclude = data.inputExclude;
+            if (!data.inputUseRegex && !data.inputExclude) modeStr = " [字符串·匹配]";
+            else if (!data.inputUseRegex &&  data.inputExclude) modeStr = " [字符串·排除]";
+            else if ( data.inputUseRegex && !data.inputExclude) modeStr = " [正则·匹配]";
+            else                                                modeStr = " [正则·排除]";
+            Element modeElem = text(modeStr) | dim;
+            if (modeIsExclude) modeElem = modeElem | color(Color::Yellow);
             if (data.inputUseRegex) {
                 Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
-                return hbox({ text(modeTag) | dim, text("  "),
+                return hbox({ std::move(modeElem), text("  "),
                               text(data.inputPrompt), text(data.inputBuffer) | bold,
                               std::move(dot) });
             }
-            return hbox({ text(modeTag) | dim, text("  "),
+            return hbox({ std::move(modeElem), text("  "),
                           text(data.inputPrompt), text(data.inputBuffer) | bold });
         }
 

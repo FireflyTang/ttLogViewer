@@ -30,7 +30,7 @@ static constexpr std::string_view kHelpText =
     "[/]: 选择过滤器\n"
     "+/-: 调整过滤器顺序\n"
     "Space: 启停过滤器\n"
-    "a/e: 添加/编辑过滤器 (输入时 Tab 切换正则)\n"
+    "a/e: 添加/编辑过滤器 (输入时 Tab 循环四模式: 字符串·匹配→字符串·排除→正则·匹配→正则·排除)\n"
     "/: 搜索 (输入时 Tab 切换正则/字符串)\n"
     "n/p: 下/上一搜索结果  Esc:清除搜索\n"
     "g: 跳转行号\n"
@@ -429,6 +429,7 @@ bool AppController::handleKeyFilterInput(const Event& event) {
             def.pattern  = inputBuffer_;
             def.color    = nextPaletteColor(colorPaletteIdx_);
             def.useRegex = filterInputUseRegex_;
+            def.exclude  = filterInputExclude_;
             chain_.append(std::move(def));
             selectedFilter_ = chain_.filterCount() - 1;
             triggerReprocess(selectedFilter_);
@@ -438,6 +439,7 @@ bool AppController::handleKeyFilterInput(const Event& event) {
                 FilterDef def = chain_.filterAt(selectedFilter_);
                 def.pattern  = inputBuffer_;
                 def.useRegex = filterInputUseRegex_;
+                def.exclude  = filterInputExclude_;
                 chain_.edit(selectedFilter_, std::move(def));
                 triggerReprocess(selectedFilter_);
             }
@@ -446,9 +448,19 @@ bool AppController::handleKeyFilterInput(const Event& event) {
         return true;
     }
 
-    // Tab: toggle regex/string mode (both FilterAdd and FilterEdit)
+    // Tab: cycle through 4 modes: str-include → str-exclude → regex-include → regex-exclude
     if (event == Event::Tab) {
-        filterInputUseRegex_ = !filterInputUseRegex_;
+        if (!filterInputUseRegex_ && !filterInputExclude_) {
+            filterInputExclude_ = true;
+        } else if (!filterInputUseRegex_ && filterInputExclude_) {
+            filterInputUseRegex_ = true;
+            filterInputExclude_  = false;
+        } else if (filterInputUseRegex_ && !filterInputExclude_) {
+            filterInputExclude_ = true;
+        } else {
+            filterInputUseRegex_ = false;
+            filterInputExclude_  = false;
+        }
         validateInputRegex();
         return true;
     }
@@ -779,6 +791,7 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.inputValid      = inputValid_;
     data.inputUseRegex   = (inputMode_ == InputMode::Search) ? searchUseRegex_
                                                               : filterInputUseRegex_;
+    data.inputExclude    = filterInputExclude_;
 
     data.showDialog      = showDialog_;
     data.dialogTitle     = dialogTitle_;
@@ -850,11 +863,11 @@ void AppController::enterInputMode(InputMode mode, std::string prompt,
     inputMode_   = mode;
     inputPrompt_ = std::move(prompt);
     inputBuffer_ = std::move(prefill);
-    // Initialize local regex toggle from filter state (FilterEdit) or default false (others).
-    filterInputUseRegex_ = (mode == InputMode::FilterEdit
-                             && selectedFilter_ < chain_.filterCount())
-                           ? chain_.filterAt(selectedFilter_).useRegex
-                           : false;
+    // Initialize local regex/exclude toggles from filter state (FilterEdit) or defaults.
+    const bool isEdit = (mode == InputMode::FilterEdit
+                         && selectedFilter_ < chain_.filterCount());
+    filterInputUseRegex_ = isEdit ? chain_.filterAt(selectedFilter_).useRegex  : false;
+    filterInputExclude_  = isEdit ? chain_.filterAt(selectedFilter_).exclude   : false;
     inputValid_  = (mode == InputMode::FilterEdit && !inputBuffer_.empty());
     if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit)
         validateInputRegex();
@@ -862,10 +875,11 @@ void AppController::enterInputMode(InputMode mode, std::string prompt,
 }
 
 void AppController::exitInputMode() {
-    inputMode_   = InputMode::None;
+    inputMode_          = InputMode::None;
     inputBuffer_.clear();
     inputPrompt_.clear();
-    inputValid_  = false;
+    inputValid_         = false;
+    filterInputExclude_ = false;
     recomputePaneHeights();
 }
 

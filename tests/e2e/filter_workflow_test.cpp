@@ -81,7 +81,8 @@ TEST_F(FilterWorkflowTest, InvalidRegexShowsDialogOnEdit) {
     addFilter("[invalid");  // Accepted as literal string
     EXPECT_EQ(chain_.filterCount(), 1u);
     key(ftxui::Event::Character('e'));   // Enter edit mode (buffer pre-filled with "[invalid")
-    key(ftxui::Event::Tab);              // Toggle to regex mode — pattern is invalid
+    key(ftxui::Event::Tab);              // Tab once → str-exclude (still string mode)
+    key(ftxui::Event::Tab);              // Tab twice → regex-include — pattern is invalid
     key(ftxui::Event::Return);           // Try to confirm — should show error dialog
     EXPECT_TRUE(data().showDialog);
     // Close dialog; filter's useRegex must still be false (edit was not committed)
@@ -183,18 +184,21 @@ TEST_F(FilterWorkflowTest, TabDuringEditTogglesUseRegex) {
     addFilter("ERROR");
     EXPECT_FALSE(chain_.filterAt(0).useRegex);  // default: string mode
     key(ftxui::Event::Character('e'));           // enter edit mode
-    key(ftxui::Event::Tab);                      // toggle to regex mode
+    key(ftxui::Event::Tab);                      // Tab once → str-exclude
+    key(ftxui::Event::Tab);                      // Tab twice → regex-include
     key(ftxui::Event::Return);                   // commit
     chain_.waitReprocess();
     EXPECT_TRUE(chain_.filterAt(0).useRegex);
+    EXPECT_FALSE(chain_.filterAt(0).exclude);
 }
 
 TEST_F(FilterWorkflowTest, InvalidRegexRemainsStringModeAfterDialog) {
-    // "[bad" can't be a regex; entering edit + Tab + Return shows dialog
+    // "[bad" can't be a regex; entering edit + Tab×2 + Return shows dialog
     addFilter("[bad");
     EXPECT_FALSE(chain_.filterAt(0).useRegex);
     key(ftxui::Event::Character('e'));   // enter edit mode (buffer: "[bad")
-    key(ftxui::Event::Tab);              // try to switch to regex mode
+    key(ftxui::Event::Tab);              // Tab once → str-exclude
+    key(ftxui::Event::Tab);              // Tab twice → regex-include — invalid pattern
     key(ftxui::Event::Return);           // pattern is invalid — dialog shown
     EXPECT_TRUE(data().showDialog);
     key(ftxui::Event::Character('q'));   // close dialog
@@ -219,4 +223,69 @@ TEST_F(FilterWorkflowTest, FilterBarLabelIncludesMatchCount) {
     ASSERT_EQ(d.filterTags.size(), 1u);
     EXPECT_EQ(d.filterTags[0].matchCount, 2u);
     EXPECT_FALSE(d.filterTags[0].useRegex);
+}
+
+// ── Tab 4-mode cycling for exclude filter ─────────────────────────────────────
+
+TEST_F(FilterWorkflowTest, TabCycleDefaultIsStringInclude) {
+    key(ftxui::Event::Character('a'));
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::FilterAdd);
+    EXPECT_FALSE(d.inputUseRegex);
+    EXPECT_FALSE(d.inputExclude);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(FilterWorkflowTest, TabCycleFirstPressIsStringExclude) {
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);
+    auto d = data();
+    EXPECT_FALSE(d.inputUseRegex);
+    EXPECT_TRUE(d.inputExclude);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(FilterWorkflowTest, TabCycleSecondPressIsRegexInclude) {
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);
+    key(ftxui::Event::Tab);
+    auto d = data();
+    EXPECT_TRUE(d.inputUseRegex);
+    EXPECT_FALSE(d.inputExclude);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(FilterWorkflowTest, TabCycleThirdPressIsRegexExclude) {
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);
+    key(ftxui::Event::Tab);
+    key(ftxui::Event::Tab);
+    auto d = data();
+    EXPECT_TRUE(d.inputUseRegex);
+    EXPECT_TRUE(d.inputExclude);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(FilterWorkflowTest, TabCycleFourthPressWrapsToStringInclude) {
+    key(ftxui::Event::Character('a'));
+    for (int i = 0; i < 4; ++i) key(ftxui::Event::Tab);
+    auto d = data();
+    EXPECT_FALSE(d.inputUseRegex);
+    EXPECT_FALSE(d.inputExclude);
+    key(ftxui::Event::Escape);
+}
+
+TEST_F(FilterWorkflowTest, ExcludeFilterRemovesMatchingLines) {
+    // Exclude filter for "ERROR" should show all non-ERROR lines (3 of 5)
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);  // str-exclude mode
+    type("ERROR");
+    key(ftxui::Event::Return);
+    chain_.waitReprocess();
+
+    ASSERT_EQ(chain_.filterCount(), 1u);
+    EXPECT_TRUE(chain_.filterAt(0).exclude);
+    EXPECT_FALSE(chain_.filterAt(0).useRegex);
+    // INFO line1, INFO line3, WARN line4 remain (ERROR line2, ERROR line5 excluded)
+    EXPECT_EQ(data().filteredPane.size(), 3u);
 }
