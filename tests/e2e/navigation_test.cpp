@@ -472,3 +472,50 @@ TEST_F(NavigationTest, XKeyInRawPaneIsNoOp) {
     key(ftxui::Event::Character('x'));
     EXPECT_EQ(highlightedLine(), lineBefore);
 }
+
+// ── ESC exits text-selection mode ────────────────────────────────────────────
+
+TEST_F(NavigationTest, EscExitsTextSelectionMode) {
+    // Enter text-selection mode via 'm'
+    key(ftxui::Event::Character('m'));
+    EXPECT_FALSE(ctrl_.isMouseTracking());
+
+    // ESC must re-enable mouse tracking
+    key(ftxui::Event::Escape);
+    EXPECT_TRUE(ctrl_.isMouseTracking());
+}
+
+TEST_F(NavigationTest, EscWithSearchClearsThenExitsSelectionMode) {
+    // Set up a search keyword first
+    key(ftxui::Event::Character('/'));
+    type("line1");
+    key(ftxui::Event::Return);
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+
+    // Enter text-selection mode
+    key(ftxui::Event::Character('m'));
+    EXPECT_FALSE(ctrl_.isMouseTracking());
+
+    // First ESC: clears search (higher priority than text-selection exit)
+    key(ftxui::Event::Escape);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
+
+    // Second ESC: exits text-selection mode
+    key(ftxui::Event::Escape);
+    EXPECT_TRUE(ctrl_.isMouseTracking());
+}
+
+// ── Jump centering ────────────────────────────────────────────────────────────
+
+TEST_F(NavigationTest, JumpToRawLineCentersViewport) {
+    // 20-line file, pane height 5 (set by SetUp via getViewData(5, 5)).
+    // Jump to line 15: idx=14, half=5/2=2, scrollOffset=14-2=12.
+    // Viewport shows rawLines 13..17; first visible line = 13.
+    key(ftxui::Event::Character('g'));
+    type("15");
+    key(ftxui::Event::Return);
+    EXPECT_EQ(highlightedLine(), 15u);
+    auto d = ctrl_.getViewData(5, 5);
+    ASSERT_FALSE(d.rawPane.empty());
+    EXPECT_EQ(d.rawPane.front().rawLineNo, 13u);
+}

@@ -134,10 +134,13 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element dot = tag.enabled
             ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
             : Element(text("○ ") | color(parseHexColor(tag.color)));
-        // Invert only the label text on selection; keep the dot its original color.
-        Element labelEl = text(std::move(label));
-        if (tag.selected) labelEl = labelEl | inverted;
-        Element row = hbox({ std::move(labelEl), std::move(dot) });
+        // Double-inversion trick: pre-invert the dot so that when the whole row is
+        // inverted for selection, the two inversions cancel for the dot — it keeps
+        // its original fg color while sharing the same highlighted background as
+        // the label text.
+        if (tag.selected) dot = dot | inverted;
+        Element row = hbox({ text(std::move(label)), std::move(dot) });
+        if (tag.selected) row = row | inverted;
         if (!tag.enabled) row = row | dim;
         items.push_back(std::move(row));
     }

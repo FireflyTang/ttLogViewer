@@ -129,10 +129,14 @@ void AppController::moveCursor(int delta, int paneHeight) {
 }
 
 void AppController::jumpToRawLine(size_t rawLineNo) {
-    // Move raw pane cursor to the given 1-based raw line
+    // Move raw pane cursor to the given 1-based raw line and center it in the viewport.
     if (rawLineNo == 0 || rawLineNo > reader_.lineCount()) return;
     const size_t idx = rawLineNo - 1;
     rawState_.cursor = idx;
+    if (lastRawPaneHeight_ > 0) {
+        const size_t half = static_cast<size_t>(lastRawPaneHeight_ / 2);
+        rawState_.scrollOffset = (idx >= half) ? idx - half : 0;
+    }
     clampScroll(rawState_, reader_.lineCount(), lastRawPaneHeight_);
 }
 
@@ -155,6 +159,12 @@ bool AppController::handleKey(const Event& event) {
     // ESC in None mode with an active search → clear search state.
     if (event == Event::Escape && !searchKeyword_.empty() && inputMode_ == InputMode::None) {
         clearSearch();
+        return true;
+    }
+
+    // ESC in None mode with mouse tracking disabled → re-enable (exit text-selection mode).
+    if (event == Event::Escape && !mouseTracking_ && inputMode_ == InputMode::None) {
+        toggleMouseTracking();
         return true;
     }
 
@@ -968,9 +978,6 @@ void AppController::triggerReprocess(size_t fromFilter) {
             showProgress_          = false;
             progress_              = 1.0;
             reprocessTimeoutShown_ = false;
-            // Force a redraw on Windows where postFn tasks may not trigger Draw()
-            // immediately (event loop may block on ReadConsoleInputW after a task).
-            if (postFn_) postFn_([] {});
         });
 }
 
@@ -1080,6 +1087,10 @@ void AppController::jumpToSearchResult(size_t idx) {
     for (size_t i = 0; i < total; ++i) {
         if (chain_.filteredLineAt(i) == rawNo) {
             filteredState_.cursor = i;
+            if (lastFilteredPaneHeight_ > 0) {
+                const size_t half = static_cast<size_t>(lastFilteredPaneHeight_ / 2);
+                filteredState_.scrollOffset = (i >= half) ? i - half : 0;
+            }
             clampScroll(filteredState_, total, lastFilteredPaneHeight_);
             return;
         }

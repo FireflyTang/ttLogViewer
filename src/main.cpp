@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 
+#include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 
 #include "app_config.hpp"
@@ -40,9 +41,14 @@ int main(int argc, char* argv[]) {
     // Note: FTXUI v6 has mouse tracking enabled by default (track_mouse_ = true).
     auto screen = ftxui::ScreenInteractive::TerminalOutput();
 
-    // Inject async post function so background threads can safely notify UI
+    // Inject async post function so background threads can safely notify UI.
+    // After executing the task, post Event::Custom to invalidate the frame and
+    // force Draw() — FTXUI only sets frame_valid_=false for Event tasks, not
+    // for plain Closure tasks, so without this the UI would not redraw until
+    // the next user input event.
     auto postFn = [&screen](std::function<void()> fn) {
         screen.Post(std::move(fn));
+        screen.PostEvent(ftxui::Event::Custom);
     };
     reader.setPostFn(postFn);
     chain.setPostFn(postFn);

@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.8（UI 打磨八项修复）
-> 测试：301 个，全部通过
+> 版本：v0.9.8 + post-release 修复（待发版为 v0.9.9）
+> 测试：304 个，全部通过
 > 最后更新：2026-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -359,6 +359,20 @@ IndexThread          FileWatcher        ReprocessThread     SearchThread
 
 后台线程持有 `PostFn`（`std::function<void(std::function<void()>)>`），测试中替换为同步版本（直接调用 lambda），使异步逻辑可以在单线程测试中确定性验证，无需 `sleep` 或复杂同步原语。
 
+**重要：FTXUI 帧失效机制**
+
+FTXUI 的 `HandleTask` 对三种任务类型的帧失效行为不同：
+
+| 类型 | `frame_valid_ = false`？ | 触发 `Draw()`？ |
+|------|--------------------------|----------------|
+| **Event**（键盘/鼠标/Custom） | ✅ 总是 | ✅ |
+| **Closure**（`screen.Post(lambda)`） | ❌ 不设置 | ❌ |
+| **AnimationTask** | 仅当 `animation_requested_` | 条件触发 |
+
+`Draw()` 在 `frame_valid_ == true` 时直接跳过。因此，**后台线程通过 `postFn_` 投递的 Closure 不会自动触发重绘**，UI 会停留在旧状态直到下一个用户输入事件。
+
+**修复方案**（`main.cpp`）：在每次 `screen.Post(fn)` 之后立即调用 `screen.PostEvent(Event::Custom)`，将一个 Event 类型任务投入队列。Event 总是设置 `frame_valid_ = false`，从而确保 `Draw()` 在任务完成后执行。`Event::Custom`（= `Event::Special({0})`）是 FTXUI 官方指定的用于此目的的事件，CatchEvent 处理链不会误响应它（`handleKey` 不匹配，返回 false）。
+
 ### 5.4 getViewData() 纯快照
 
 `getViewData()` 的合约是"构建快照"而非"修改状态"。滚动 clamp（`mutable` 成员）是唯一例外，且只为保证渲染的合法性，不影响业务逻辑正确性。这使渲染层完全是纯函数式的：同样的 `ViewData` 必然渲染出同样的画面。
@@ -460,3 +474,31 @@ IndexThread          FileWatcher        ReprocessThread     SearchThread
 ```bash
 /c/msys64/mingw64/bin/ninja.exe -C build && build/bin/ttLogViewer_tests.exe
 ```
+
+---
+
+## 9. Post-v0.9.8 修复记录（待合入 v0.9.9）
+
+### 9.1 进度弹窗不自动消失（根本原因定位与修复）
+
+**问题**：添加过滤器后"过滤处理中"弹窗停留在 0%，必须按键才消失。此 bug 两次尝试修复未果（均基于错误假设：Windows ReadConsoleInputW 阻塞了事件循环）。
+
+**根本原因**：FTXUI `HandleTask`（`screen_interactive.cpp:779`）处理 **Closure** 类型任务时不设置 `frame_valid_ = false`（仅 Event 类型会设置），而 `Draw()` 在 `frame_valid_ == true` 时直接返回不渲染。因此 `screen.Post(lambda)` 投递的回调执行后，UI 不重绘——直到下一个真实用户按键事件到来。
+
+**修复**（`main.cpp`）：`postFn` 在每次 `screen.Post(fn)` 后立即调用 `screen.PostEvent(Event::Custom)` 注入一个 Event 类型任务，强制帧失效和 `Draw()` 执行。同时删除了 `app_controller.cpp` 中已无效的 `postFn_([] {})` hack。
+
+### 9.2 ESC 退出选文模式
+
+**原行为**：进入选文模式（`m` 键）后只能再按 `m` 退出。
+**新行为**：ESC 也能退出选文模式（在无进度取消、无搜索关键词时生效）。
+**实现**：在 `handleKey` 的 ESC 分支末尾增加 `!mouseTracking_` 检查 → `toggleMouseTracking()`。
+
+### 9.3 跳转居中
+
+**原行为**：`jumpToRawLine`（'x' 键、'g' goto、n/p 搜索跳转）使用 `clampScroll` 最小滚动——目标行在视口边缘显示。
+**新行为**：跳转目标行尽量居中显示（`scrollOffset = cursor - paneHeight/2`），再经 `clampScroll` 修正边界。同样适用于过滤窗格的搜索结果跳转（`jumpToSearchResult`）。
+
+### 9.4 过滤器圆点背景一致
+
+**问题**：选中过滤器行时，label 反色高亮，dot 背景仍为默认色，视觉上不协调。
+**修复**（双重反色技巧）：先对 dot 预施加 `| inverted`，再对整行施加 `| inverted`。两次反色相消——dot 保留原有前景色，同时与 label 共享相同的高亮背景。
