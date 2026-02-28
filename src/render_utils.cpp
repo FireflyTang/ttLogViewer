@@ -41,6 +41,81 @@ Color parseHexColor(std::string_view hex) {
     return Color::White;
 }
 
+// ── UTF-8 display width ───────────────────────────────────────────────────────
+
+char32_t decodeUtf8Codepoint(std::string_view s, size_t& pos) {
+    if (pos >= s.size()) return U'\xFFFD';
+    const auto b0 = static_cast<unsigned char>(s[pos]);
+
+    // Single byte (ASCII)
+    if (b0 < 0x80) { pos += 1; return static_cast<char32_t>(b0); }
+
+    // Determine sequence length
+    int seqLen;
+    char32_t cp;
+    if      ((b0 & 0xE0) == 0xC0) { seqLen = 2; cp = b0 & 0x1F; }
+    else if ((b0 & 0xF0) == 0xE0) { seqLen = 3; cp = b0 & 0x0F; }
+    else if ((b0 & 0xF8) == 0xF0) { seqLen = 4; cp = b0 & 0x07; }
+    else { pos += 1; return U'\xFFFD'; } // invalid lead byte
+
+    if (pos + static_cast<size_t>(seqLen) > s.size()) { pos += 1; return U'\xFFFD'; }
+
+    for (int i = 1; i < seqLen; ++i) {
+        const auto b = static_cast<unsigned char>(s[pos + static_cast<size_t>(i)]);
+        if ((b & 0xC0) != 0x80) { pos += 1; return U'\xFFFD'; }
+        cp = (cp << 6) | (b & 0x3F);
+    }
+    pos += static_cast<size_t>(seqLen);
+    return cp;
+}
+
+int codepointDisplayWidth(char32_t cp) {
+    if (cp < 0x20 || cp == 0x7F) return 0;  // control characters
+
+    // East Asian Wide / Fullwidth ranges (simplified)
+    if ((cp >= 0x1100  && cp <= 0x115F)  ||  // Hangul Jamo
+        (cp >= 0x2329  && cp <= 0x232A)  ||  // Angle brackets
+        (cp >= 0x2E80  && cp <= 0x303E)  ||  // CJK Radicals, Kangxi
+        (cp >= 0x3040  && cp <= 0x33FF)  ||  // Hiragana..CJK Compatibility
+        (cp >= 0x3400  && cp <= 0x4DBF)  ||  // CJK Extension A
+        (cp >= 0x4E00  && cp <= 0xA4CF)  ||  // CJK Unified..Yi
+        (cp >= 0xA960  && cp <= 0xA97F)  ||  // Hangul Jamo Extended-A
+        (cp >= 0xAC00  && cp <= 0xD7FF)  ||  // Hangul Syllables
+        (cp >= 0xF900  && cp <= 0xFAFF)  ||  // CJK Compatibility Ideographs
+        (cp >= 0xFE10  && cp <= 0xFE6F)  ||  // Vertical forms + CJK Compat
+        (cp >= 0xFF01  && cp <= 0xFF60)  ||  // Fullwidth Forms
+        (cp >= 0xFFE0  && cp <= 0xFFE6)  ||  // Fullwidth Signs
+        (cp >= 0x1F000 && cp <= 0x1FAFF) ||  // Emoji/Mahjong/Domino
+        (cp >= 0x20000 && cp <= 0x2FA1F))    // CJK Extensions B-G
+        return 2;
+
+    return 1;
+}
+
+size_t displayColToByteOffset(std::string_view s, size_t startByte, int targetCol) {
+    if (targetCol <= 0) return startByte;
+    size_t pos = startByte;
+    int col = 0;
+    while (pos < s.size() && col < targetCol) {
+        size_t prevPos = pos;
+        char32_t cp = decodeUtf8Codepoint(s, pos);
+        int w = codepointDisplayWidth(cp);
+        if (col + w > targetCol) { return prevPos; }  // would overshoot
+        col += w;
+    }
+    return pos;
+}
+
+int byteOffsetToDisplayCol(std::string_view s, size_t startByte, size_t targetByte) {
+    int col = 0;
+    size_t pos = startByte;
+    while (pos < s.size() && pos < targetByte) {
+        char32_t cp = decodeUtf8Codepoint(s, pos);
+        col += codepointDisplayWidth(cp);
+    }
+    return col;
+}
+
 // ── Line renderer ──────────────────────────────────────────────────────────────
 
 Element renderColoredLine(std::string_view content,
@@ -48,7 +123,8 @@ Element renderColoredLine(std::string_view content,
                            const std::vector<SearchSpan>& searchSpans,
                            bool folded,
                            int terminalWidth,
-                           size_t hOffset) {
+                           size_t hOffset,
+                           const std::vector<SelectionSpan>& selectionSpans) {
     // Horizontal scroll: shift content and spans by hOffset bytes (UTF-8 safe).
     // Folded lines are not shifted (the fold truncation already implies short content).
     if (hOffset > 0 && !folded) {
@@ -72,15 +148,24 @@ Element renderColoredLine(std::string_view content,
             shiftedSS.push_back({s.start > hOffset ? s.start - hOffset : 0,
                                  s.end - hOffset});
         }
-        return renderColoredLine(content, shifted, shiftedSS, folded, terminalWidth, 0);
+        // Shift SelectionSpans similarly
+        std::vector<SelectionSpan> shiftedSel;
+        for (const auto& s : selectionSpans) {
+            if (s.end <= hOffset) continue;
+            shiftedSel.push_back({s.start > hOffset ? s.start - hOffset : 0,
+                                  s.end - hOffset});
+        }
+        return renderColoredLine(content, shifted, shiftedSS,
+                                 folded, terminalWidth, 0, shiftedSel);
     }
 
     // Clip content to terminal width (UTF-8 safe) so that rendering stays within
     // the visible area regardless of FTXUI's clipping behaviour.
     // For folded mode, reserve 1 column for the "…" indicator.
     // Make local mutable copies of spans so we can clip them.
-    std::vector<ColorSpan>  clippedSpans(spans);
-    std::vector<SearchSpan> clippedSearchSpans(searchSpans);
+    std::vector<ColorSpan>     clippedSpans(spans);
+    std::vector<SearchSpan>    clippedSearchSpans(searchSpans);
+    std::vector<SelectionSpan> clippedSelSpans(selectionSpans);
 
     if (terminalWidth > 0) {
         size_t avail = (folded && terminalWidth > 1)
@@ -96,6 +181,7 @@ Element renderColoredLine(std::string_view content,
         };
         clipVec(clippedSpans);
         clipVec(clippedSearchSpans);
+        clipVec(clippedSelSpans);
     }
 
     // Handle empty content after clipping.
@@ -103,16 +189,18 @@ Element renderColoredLine(std::string_view content,
         return folded ? Element(text("…") | dim) : text("");
 
     // Fast path: no spans at all
-    if (clippedSpans.empty() && clippedSearchSpans.empty()) {
+    if (clippedSpans.empty() && clippedSearchSpans.empty() && clippedSelSpans.empty()) {
         if (folded && terminalWidth > 1)
             return hbox({ text(std::string(content)), text("…") | dim });
         return text(std::string(content));
     }
 
-    // Collect all boundary points from both span types, then render each segment
-    // with the appropriate color / bold+underlined decorators.
+    // Collect all boundary points from all span types, then render each segment
+    // with the appropriate style based on priority.
     std::vector<size_t> pts;
-    pts.reserve(2 + clippedSpans.size() * 2 + clippedSearchSpans.size() * 2);
+    pts.reserve(2 + clippedSpans.size() * 2
+                  + clippedSearchSpans.size() * 2
+                  + clippedSelSpans.size() * 2);
     pts.push_back(0);
     pts.push_back(content.size());
     for (const auto& s : clippedSpans) {
@@ -120,6 +208,10 @@ Element renderColoredLine(std::string_view content,
         pts.push_back(s.end);
     }
     for (const auto& s : clippedSearchSpans) {
+        pts.push_back(s.start);
+        pts.push_back(s.end);
+    }
+    for (const auto& s : clippedSelSpans) {
         pts.push_back(s.start);
         pts.push_back(s.end);
     }
@@ -133,19 +225,29 @@ Element renderColoredLine(std::string_view content,
         if (a >= content.size()) break;
         const size_t len = std::min(b, content.size()) - a;
 
-        // Determine color from the first covering ColorSpan
-        std::string_view col;
-        for (const auto& s : clippedSpans)
-            if (s.start <= a && b <= s.end) { col = s.color; break; }
-
-        // Determine whether to apply inverted color from SearchSpan
-        bool isMatch = false;
-        for (const auto& s : clippedSearchSpans)
-            if (s.start <= a && b <= s.end) { isMatch = true; break; }
+        // Priority: Selection > Search > Filter color
+        bool isSelected = false;
+        for (const auto& s : clippedSelSpans)
+            if (s.start <= a && b <= s.end) { isSelected = true; break; }
 
         Element e = text(std::string(content.substr(a, len)));
-        if (!col.empty())  e = e | color(parseHexColor(col));
-        if (isMatch)       e = e | inverted;
+
+        if (isSelected) {
+            e = e | bgcolor(Color::Blue) | color(Color::White);
+        } else {
+            // Determine color from the first covering ColorSpan
+            std::string_view col;
+            for (const auto& s : clippedSpans)
+                if (s.start <= a && b <= s.end) { col = s.color; break; }
+
+            // Determine whether to apply inverted color from SearchSpan
+            bool isMatch = false;
+            for (const auto& s : clippedSearchSpans)
+                if (s.start <= a && b <= s.end) { isMatch = true; break; }
+
+            if (!col.empty())  e = e | color(parseHexColor(col));
+            if (isMatch)       e = e | inverted;
+        }
         parts.push_back(std::move(e));
     }
 

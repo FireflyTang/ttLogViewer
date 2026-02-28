@@ -41,12 +41,13 @@ struct PaneState {
 };
 
 struct LogLine {
-    size_t                  rawLineNo   = 0;
-    std::string_view        content;
-    std::vector<ColorSpan>  colors;
-    std::vector<SearchSpan> searchSpans;   // inverted-color search matches
-    bool                    highlighted = false;
-    bool                    folded      = false;
+    size_t                      rawLineNo   = 0;
+    std::string_view            content;
+    std::vector<ColorSpan>      colors;
+    std::vector<SearchSpan>     searchSpans;      // inverted-color search matches
+    std::vector<SelectionSpan>  selectionSpans;   // character-level text selection
+    bool                        highlighted = false;
+    bool                        folded      = false;
 };
 
 struct ViewData {
@@ -105,8 +106,8 @@ struct ViewData {
     bool        searchActive      = false;  // true while a search keyword is set
     bool        searchUseRegex    = false;  // current search mode (regex or literal)
 
-    // ── Mouse tracking ────────────────────────────────────────────────────────
-    bool        mouseTracking     = true;   // false = text-selection mode
+    // ── Text selection ───────────────────────────────────────────────────────
+    bool        hasSelection      = false;  // true when character-level selection is active
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -166,9 +167,19 @@ public:
     // Returns true when a modal dialog (info or choice) is currently visible.
     bool isDialogOpen() const;
 
-    // Toggle FTXUI mouse tracking on/off (allows native text selection when off).
-    void toggleMouseTracking();
-    bool isMouseTracking() const;
+    // ── Text selection (character-level mouse drag) ────────────────────────
+    void startSelection(FocusArea pane, size_t lineIndex, size_t byteOffset);
+    void extendSelection(size_t lineIndex, size_t byteOffset);
+    void finalizeSelection();
+    void clearSelection();
+    bool hasSelection() const;
+    bool isSelectionDragging() const;
+    void copySelectionToClipboard();
+
+    // Convert a raw terminal screen-column (m.x from FTXUI Mouse event) within
+    // the given pane/row to a byte offset within the line content.
+    // Accounts for the line-number prefix and horizontal scroll internally.
+    size_t screenColToByteOffset(FocusArea pane, size_t lineIndex, int screenCol) const;
 
 private:
     ILogReader&   reader_;
@@ -220,8 +231,22 @@ private:
     std::chrono::steady_clock::time_point reprocessStartTime_;
     bool reprocessTimeoutShown_ = false;
 
-    // ── Mouse tracking ────────────────────────────────────────────────────────
-    bool mouseTracking_ = true;   // false = text-selection mode (mouse events passed through)
+    // ── Text selection ────────────────────────────────────────────────────────
+    struct SelectionPoint {
+        FocusArea pane       = FocusArea::Raw;
+        size_t    lineIndex  = 0;   // 0-based absolute index in the pane
+        size_t    byteOffset = 0;   // byte offset within the line content
+    };
+    struct SelectionState {
+        bool active   = false;  // true if at least one char is selected
+        bool dragging = false;  // true while mouse button is held down
+        SelectionPoint anchor;  // where the drag started
+        SelectionPoint current; // where the drag currently is
+        void clear() { active = dragging = false; }
+        // Return ordered (start, end) pair by line index then byte offset.
+        std::pair<SelectionPoint, SelectionPoint> ordered() const;
+    };
+    SelectionState selection_;
 
     // ── Display state ─────────────────────────────────────────────────────────
     bool                       showLineNumbers_ = true;
@@ -293,6 +318,9 @@ private:
 
     // Toggle fold state for the line currently under the cursor.
     void toggleFoldCurrentLine();
+
+    // ── Selection helpers ─────────────────────────────────────────────────────
+    std::string buildSelectedText() const;
 
     // ── getViewData helpers ────────────────────────────────────────────────────
     void buildRawPane(ViewData& data);

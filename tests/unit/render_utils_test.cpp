@@ -270,3 +270,106 @@ TEST(RenderColoredLine, NarrowWindowPartialColorSpan) {
     auto e = renderColoredLine("hello world", cs, {}, false, 6, 0);
     EXPECT_NO_THROW(renderLine(e, 10));
 }
+
+// ── SelectionSpan rendering ───────────────────────────────────────────────────
+
+TEST(RenderColoredLine, SelectionSpanNoCrash) {
+    std::vector<SelectionSpan> sel = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 0, sel);
+    EXPECT_NO_THROW(renderLine(e, 20));
+}
+
+TEST(RenderColoredLine, SelectionSpanContentVisible) {
+    std::vector<SelectionSpan> sel = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 0, sel);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, SelectionOverridesColorSpan) {
+    // Color span covers full "hello world"; selection covers "world" (6-11).
+    // The selected portion should use selection's Blue bg, not the color span.
+    // Both must still appear in the rendered output.
+    std::vector<ColorSpan>     cs  = {{ 0, 11, "#FF5555" }};
+    std::vector<SelectionSpan> sel = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", cs, {}, false, 0, 0, sel);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("hello"), std::string::npos);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, SelectionWithHOffset) {
+    // hOffset=6 scrolls past "hello "; selection covers bytes 6-11 (="world").
+    // After shifting, the selection maps to bytes 0-5 in the shifted view.
+    std::vector<SelectionSpan> sel = {{ 6, 11 }};
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 6, sel);
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+TEST(RenderColoredLine, SelectionBeforeHOffsetDropped) {
+    // Selection covers "hello" (0-5); hOffset=6 puts the selection before the view.
+    std::vector<SelectionSpan> sel = {{ 0, 5 }};
+    auto e = renderColoredLine("hello world", {}, {}, false, 0, 6, sel);
+    // Should not crash; "world" is visible.
+    std::string s = renderLine(e, 20);
+    EXPECT_NE(s.find("world"), std::string::npos);
+}
+
+// ── displayColToByteOffset ────────────────────────────────────────────────────
+
+TEST(DisplayColToByteOffset, ASCIIForwardMapping) {
+    std::string_view s = "hello world";
+    // Column 0 from byte 0 → byte 0
+    EXPECT_EQ(displayColToByteOffset(s, 0, 0), 0u);
+    // Column 5 from byte 0 → byte 5
+    EXPECT_EQ(displayColToByteOffset(s, 0, 5), 5u);
+    // Column 11 (= end) from byte 0 → byte 11
+    EXPECT_EQ(displayColToByteOffset(s, 0, 11), 11u);
+}
+
+TEST(DisplayColToByteOffset, StartByteMidString) {
+    // Start from byte 6 ("world"), advance 3 columns → byte 9
+    std::string_view s = "hello world";
+    EXPECT_EQ(displayColToByteOffset(s, 6, 3), 9u);
+}
+
+TEST(DisplayColToByteOffset, CJKTwoColsPerChar) {
+    // "你好" = 2 CJK chars × 3 bytes each = 6 bytes total
+    // Each char takes 2 display columns.
+    // Column 0 → byte 0; column 2 → byte 3; column 4 → byte 6 (end)
+    std::string s = "\xe4\xbd\xa0\xe5\xa5\xbd";  // 你好
+    EXPECT_EQ(displayColToByteOffset(s, 0, 0), 0u);
+    EXPECT_EQ(displayColToByteOffset(s, 0, 2), 3u);
+    EXPECT_EQ(displayColToByteOffset(s, 0, 4), 6u);
+}
+
+TEST(DisplayColToByteOffset, ColumnPastEndClampsToBoundary) {
+    // Requesting a column beyond the string end should return string size.
+    std::string_view s = "hi";
+    EXPECT_EQ(displayColToByteOffset(s, 0, 100), 2u);
+}
+
+// ── byteOffsetToDisplayCol ────────────────────────────────────────────────────
+
+TEST(ByteOffsetToDisplayCol, ASCIIBasic) {
+    std::string_view s = "hello world";
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 0),  0);
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 5),  5);
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 11), 11);
+}
+
+TEST(ByteOffsetToDisplayCol, CJKTwoColsPerChar) {
+    // "你好" → each char is 3 bytes wide but 2 display columns.
+    std::string s = "\xe4\xbd\xa0\xe5\xa5\xbd";  // 你好
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 0), 0);
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 3), 2);  // after 你
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 0, 6), 4);  // after 好
+}
+
+TEST(ByteOffsetToDisplayCol, StartByteMidString) {
+    std::string_view s = "hello world";
+    // Start at byte 6 ("world"), measure to byte 9 → 3 columns
+    EXPECT_EQ(byteOffsetToDisplayCol(s, 6, 9), 3);
+}

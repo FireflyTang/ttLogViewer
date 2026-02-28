@@ -6,6 +6,7 @@ add_library(ttLogViewer_lib STATIC
     app_controller.cpp
     render_utils.cpp
     render.cpp
+    clipboard.cpp
 )
 
 target_include_directories(ttLogViewer_lib

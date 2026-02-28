@@ -1,8 +1,8 @@
 # ttLogViewer 实现报告
 
 > 版本：v0.9.8 + post-release 修复（待发版为 v0.9.9）
-> 测试：304 个，全部通过
-> 最后更新：2026-02
+> 测试：342 个，全部通过
+> 最后更新：2026-03
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
 
@@ -487,11 +487,21 @@ FTXUI 的 `HandleTask` 对三种任务类型的帧失效行为不同：
 
 **修复**（`main.cpp`）：`postFn` 在每次 `screen.Post(fn)` 后立即调用 `screen.PostEvent(Event::Custom)` 注入一个 Event 类型任务，强制帧失效和 `Draw()` 执行。同时删除了 `app_controller.cpp` 中已无效的 `postFn_([] {})` hack。
 
-### 9.2 ESC 退出选文模式
+### 9.2 ESC 优先级链（重要）
 
-**原行为**：进入选文模式（`m` 键）后只能再按 `m` 退出。
-**新行为**：ESC 也能退出选文模式（在无进度取消、无搜索关键词时生效）。
-**实现**：在 `handleKey` 的 ESC 分支末尾增加 `!mouseTracking_` 检查 → `toggleMouseTracking()`。
+`handleKey` 在 None 模式下对 ESC 的处理是 **有序的短路链**：
+
+```
+ESC
+ ├─1. showProgress_ && None mode → cancelReprocess()（中断过滤，最高优先）
+ ├─2. selection_.active && None mode → clearSelection()（清除文本选区）
+ └─3. !searchKeyword_.empty() && None mode → clearSearch()（清除搜索）
+```
+
+**优先级规则**：
+- 进度取消 > 清除选区 > 清除搜索
+- 每次 ESC 只触发一个动作，用户需要多次按 ESC 才能逐层退出
+- 在输入模式（FilterAdd/FilterEdit/Search/GotoLine/OpenFile/ExportConfirm）下，ESC 由 `handleCommonInputKeys` 处理，直接退出输入模式，不经过上述链
 
 ### 9.3 跳转居中
 
@@ -502,3 +512,102 @@ FTXUI 的 `HandleTask` 对三种任务类型的帧失效行为不同：
 
 **问题**：选中过滤器行时，label 反色高亮，dot 背景仍为默认色，视觉上不协调。
 **修复**（双重反色技巧）：先对 dot 预施加 `| inverted`，再对整行施加 `| inverted`。两次反色相消——dot 保留原有前景色，同时与 label 共享相同的高亮背景。
+
+---
+
+## 10. 字符级文本选择与剪贴板（v0.9.9）
+
+### 10.1 设计决策
+
+**为什么不用终端原生选文？**
+终端鼠标协议是全有全无的。启用 ANSI 鼠标跟踪（`\033[?1003h`）后，终端将所有鼠标事件路由给应用；关闭后，终端自行处理鼠标（原生选文），但应用收不到任何鼠标事件（包括滚轮）。由于滚轮更常用，保持 FTXUI 鼠标跟踪常开，在 TUI 层自己实现字符级选区。
+
+**已删除 `m` 键**：原先 `m` 键用于在"鼠标跟踪/原生选文"之间切换，现已删除。鼠标跟踪始终开启，选区由拖拽实现，ESC 清除。
+
+### 10.2 架构
+
+```
+render.cpp CatchEvent
+    Left+Pressed  → controller.startSelection(pane, row, byte)
+    Left+Moved    → controller.extendSelection(row, byte)
+    Left+Released → hasSelection ? finalizeSelection() : clickLine()
+    Ctrl+C        → controller.copySelectionToClipboard()
+
+app_controller.cpp
+    SelectionState { anchor, current, active, dragging }
+    buildRawPane/buildFilteredPane → 填充 ll.selectionSpans
+    ESC (优先级2) → clearSelection()
+    handleNewLines / handleFileReset / triggerReprocess.onDone / setFocus → clearSelection()
+
+render_utils.cpp renderColoredLine
+    SelectionSpan 渲染优先级最高（bgcolor Blue + White fg）
+
+clipboard.hpp / clipboard.cpp
+    Windows: CF_UNICODETEXT（UTF-8 ↔ UTF-16 via Win32 API）
+    Linux/macOS: 存根，记录为未来功能
+```
+
+### 10.3 坐标转换：屏幕列 → 字节偏移
+
+`screenColToByteOffset(FocusArea, lineIndex, screenCol)` 的转换链：
+
+```
+m.x（终端绝对列）
+  → 减去前缀宽度（行号位数+1 + 2 for "▶ "/"  "）= contentCol
+  → displayColToByteOffset(content, hScroll, contentCol) = 绝对字节偏移
+```
+
+关键点：
+- `displayColToByteOffset` 返回 `content` 内的**绝对**字节偏移（不需要再加 hScroll）
+- CJK 字符每个占 2 个显示列；ASCII 每个占 1 个
+- 点击前缀区域（行号/箭头）返回 0（选区从行首开始）
+
+### 10.4 SelectionState 生命周期
+
+```
+startSelection  → active=false, dragging=true, anchor=current=点击位置
+extendSelection → active=(anchor≠current), current=鼠标位置
+finalizeSelection → dragging=false, active 保持（用户手动 ESC 或单击清除）
+clearSelection  → active=false, dragging=false
+```
+
+**自动清除时机**（内容变化时选区失效）：
+- `handleNewLines`：实时模式追加新行
+- `handleFileReset`：文件被截断/替换
+- `triggerReprocess.onDone`：过滤器变更后重新计算
+- `setFocus`：切换到不同窗格（anchor.pane 不同）
+- `clickLine`：普通单击（无拖拽时 release 触发）
+
+### 10.5 渲染优先级（span 覆盖规则）
+
+`renderColoredLine` 用边界点算法渲染各种 span，优先级从高到低：
+
+| 优先级 | 类型 | 来源 | 样式 |
+|--------|------|------|------|
+| 1（最高）| SelectionSpan | 鼠标拖拽选区 | `bgcolor(Blue)` + `color(White)` |
+| 2 | SearchSpan | 搜索关键词当前结果 | `inverted` |
+| 3 | ColorSpan | 过滤器颜色标记 | `color(parseHexColor(...))` |
+| 4 | 无 | 未命中 | 终端默认样式 |
+
+当 SelectionSpan 和其他 span 重叠时，选区高亮覆盖所有下层样式。
+
+### 10.6 `buildSelectedText` 多行文本组装
+
+- 按 `SelectionState::ordered()` 确定有序 (start, end) 区间
+- 逐行从 reader_（或 filteredLineAt）取原始内容，不含行号、折叠省略号
+- 第一行：`[anchor.byteOffset, content.size())`；中间行：完整行；最后行：`[0, current.byteOffset)`
+- 各行用 `\n` 连接（不含行尾换行）
+
+### 10.7 Ctrl+V 粘贴（输入模式）
+
+`handleCommonInputKeys` 中拦截 `Event::CtrlV`，调用 `clipboardPaste`：
+- `Ok` → 追加到 `inputBuffer_`，重新校验正则
+- `MultiLine` → 弹出错误对话框"剪贴板内容含多行，无法粘贴"
+- `NotText` → 弹出错误对话框"剪贴板内容不是文本"
+- `Empty` / `Error` → 静默忽略
+
+### 10.8 未来功能（已记录）
+
+- Linux/macOS 剪贴板集成（xclip/xsel/wl-clipboard/pbcopy）
+- 拖拽时自动滚动（目前拖到窗格边界不会滚动）
+- Shift+点击扩展选区（已明确不做）

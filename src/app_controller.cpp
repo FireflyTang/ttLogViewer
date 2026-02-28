@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app_config.hpp"
+#include "clipboard.hpp"
 #include "version.hpp"
 
 using namespace ftxui;
@@ -24,15 +25,15 @@ static constexpr std::string_view kHelpText =
     "Home/End: 首/末行\n"
     "Tab: 切换区域\n"
     "←/→: 水平滚动\n"
-    "a: 添加过滤器\n"
-    "e: 编辑过滤器\n"
+    "a/e: 添加/编辑过滤器 (输入时 Tab 循环四模式: 字符串·匹配→字符串·排除→正则·匹配→正则·排除)\n"
     "d: 删除过滤器\n"
     "[/]: 选择过滤器\n"
     "+/-: 调整过滤器顺序\n"
     "Space: 启停过滤器\n"
-    "a/e: 添加/编辑过滤器 (输入时 Tab 循环四模式: 字符串·匹配→字符串·排除→正则·匹配→正则·排除)\n"
     "/: 搜索 (输入时 Tab 切换正则/字符串)\n"
     "n/p: 下/上一搜索结果  Esc:清除搜索\n"
+    "鼠标拖拽: 字符级文本选择  Ctrl+C:复制  Esc:取消选择\n"
+    "输入模式下 Ctrl+V: 从剪贴板粘贴\n"
     "g: 跳转行号\n"
     "G: 跟随末尾\n"
     "o: 打开文件\n"
@@ -41,7 +42,6 @@ static constexpr std::string_view kHelpText =
     "l: 行号显示切换\n"
     "z: 折叠/展开超长行\n"
     "w: 导出过滤结果\n"
-    "m: 切换鼠标选择模式\n"
     "x: 跳转原始行（过滤窗格中）\n"
     "h: 帮助\n"
     "q: 退出";
@@ -156,15 +156,15 @@ bool AppController::handleKey(const Event& event) {
         return true;
     }
 
-    // ESC in None mode with an active search → clear search state.
-    if (event == Event::Escape && !searchKeyword_.empty() && inputMode_ == InputMode::None) {
-        clearSearch();
+    // ESC in None mode with an active selection → clear it (higher priority than search).
+    if (event == Event::Escape && selection_.active && inputMode_ == InputMode::None) {
+        clearSelection();
         return true;
     }
 
-    // ESC in None mode with mouse tracking disabled → re-enable (exit text-selection mode).
-    if (event == Event::Escape && !mouseTracking_ && inputMode_ == InputMode::None) {
-        toggleMouseTracking();
+    // ESC in None mode with an active search → clear search state.
+    if (event == Event::Escape && !searchKeyword_.empty() && inputMode_ == InputMode::None) {
+        clearSearch();
         return true;
     }
 
@@ -377,10 +377,6 @@ bool AppController::handleModeKeys(const Event& event) {
         dialogTitle_     = std::string("ttLogViewer v") + TTLOGVIEWER_VERSION + "  帮助";
         dialogBody_      = std::string(kHelpText);
         dialogHasChoice_ = false;
-        return true;
-    }
-    if (event == Event::Character('m')) {
-        toggleMouseTracking();
         return true;
     }
     if (event == Event::Character('w')) {
@@ -634,6 +630,7 @@ bool AppController::handleKeyDialog(const Event& event) {
 void AppController::handleNewLines(size_t firstLine, size_t lastLine) {
     chain_.processNewLines(firstLine, lastLine);
     newLineCount_ += lastLine - firstLine + 1;
+    selection_.clear();  // Content changed — auto-clear selection
 
     if (followTail_ && inputMode_ == InputMode::None) {
         newLineCount_ = 0;
@@ -646,6 +643,7 @@ void AppController::handleNewLines(size_t firstLine, size_t lastLine) {
 }
 
 void AppController::handleFileReset() {
+    selection_.clear();  // Content changed — auto-clear selection
     showDialog_      = true;
     dialogTitle_     = "文件已重置";
     dialogBody_      = "检测到文件被截断或替换。\n是否重新加载?";
@@ -708,20 +706,32 @@ void AppController::buildRawPane(ViewData& data) {
         (!searchKeyword_.empty() && !searchResults_.empty())
         ? searchResults_[searchIndex_] : 0;
 
+    // Build selection span for a given line index within the visible slice.
+    auto selSpans = [&](size_t sliceIdx, size_t contentSize) -> std::vector<SelectionSpan> {
+        if (!selection_.active || selection_.anchor.pane != FocusArea::Raw) return {};
+        auto [startPt, endPt] = selection_.ordered();
+        if (sliceIdx < startPt.lineIndex || sliceIdx > endPt.lineIndex) return {};
+        const size_t bStart = (sliceIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
+        const size_t bEnd   = (sliceIdx == endPt.lineIndex)   ? endPt.byteOffset   : contentSize;
+        if (bStart >= bEnd) return {};
+        return {{ bStart, bEnd }};
+    };
+
     data.rawPane.reserve(count);
     size_t maxContentLen = 0;
     for (size_t i = 0; i < count; ++i) {
         const size_t lineNo = first + i + 1;
         LogLine ll;
-        ll.rawLineNo   = lineNo;
-        ll.content     = reader_.getLine(lineNo);
-        ll.colors      = {};   // raw pane does not show filter match colors
-        ll.searchSpans = (lineNo == currentResultRawLine)
+        ll.rawLineNo      = lineNo;
+        ll.content        = reader_.getLine(lineNo);
+        ll.colors         = {};   // raw pane does not show filter match colors
+        ll.searchSpans    = (lineNo == currentResultRawLine)
             ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
             : std::vector<SearchSpan>{};
-        ll.highlighted = (first + i == rawState_.cursor);
-        ll.folded      = (foldedLines_.count(lineNo) > 0);
-        maxContentLen  = std::max(maxContentLen, ll.content.size());
+        ll.selectionSpans = selSpans(i, ll.content.size());
+        ll.highlighted    = (first + i == rawState_.cursor);
+        ll.folded         = (foldedLines_.count(lineNo) > 0);
+        maxContentLen     = std::max(maxContentLen, ll.content.size());
         data.rawPane.push_back(std::move(ll));
     }
 
@@ -745,19 +755,30 @@ void AppController::buildFilteredPane(ViewData& data) {
         (!searchKeyword_.empty() && !searchResults_.empty())
         ? searchResults_[searchIndex_] : 0;
 
+    auto selSpansFilt = [&](size_t sliceIdx, size_t contentSize) -> std::vector<SelectionSpan> {
+        if (!selection_.active || selection_.anchor.pane != FocusArea::Filtered) return {};
+        auto [startPt, endPt] = selection_.ordered();
+        if (sliceIdx < startPt.lineIndex || sliceIdx > endPt.lineIndex) return {};
+        const size_t bStart = (sliceIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
+        const size_t bEnd   = (sliceIdx == endPt.lineIndex)   ? endPt.byteOffset   : contentSize;
+        if (bStart >= bEnd) return {};
+        return {{ bStart, bEnd }};
+    };
+
     data.filteredPane.reserve(count);
     size_t maxContentLenFilt = 0;
     for (size_t i = 0; i < count; ++i) {
         const size_t rawLineNo = chain_.filteredLineAt(first + i);
         LogLine ll;
-        ll.rawLineNo   = rawLineNo;
-        ll.content     = reader_.getLine(rawLineNo);
-        ll.colors      = chain_.computeColors(rawLineNo, ll.content);
-        ll.searchSpans = (rawLineNo == currentResultRawLine)
+        ll.rawLineNo      = rawLineNo;
+        ll.content        = reader_.getLine(rawLineNo);
+        ll.colors         = chain_.computeColors(rawLineNo, ll.content);
+        ll.searchSpans    = (rawLineNo == currentResultRawLine)
             ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
             : std::vector<SearchSpan>{};
-        ll.highlighted = (first + i == filteredState_.cursor);
-        ll.folded      = (foldedLines_.count(rawLineNo) > 0);
+        ll.selectionSpans = selSpansFilt(i, ll.content.size());
+        ll.highlighted    = (first + i == filteredState_.cursor);
+        ll.folded         = (foldedLines_.count(rawLineNo) > 0);
         maxContentLenFilt = std::max(maxContentLenFilt, ll.content.size());
         data.filteredPane.push_back(std::move(ll));
     }
@@ -808,7 +829,7 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.searchResultIndex = searchResults_.empty() ? 0 : searchIndex_ + 1;
     data.searchActive      = !searchKeyword_.empty();
     data.searchUseRegex    = searchUseRegex_;
-    data.mouseTracking     = mouseTracking_;
+    data.hasSelection      = selection_.active;
 
     buildRawPane(data);
     buildFilteredPane(data);
@@ -916,6 +937,24 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
         return true;
     }
 
+    // Handle Ctrl+V — paste from system clipboard into the input buffer
+    if (event == Event::CtrlV) {
+        std::string pasted;
+        const ClipboardResult result = clipboardPaste(pasted);
+        if (result == ClipboardResult::Ok) {
+            inputBuffer_ += pasted;
+            if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
+                    || inputMode_ == InputMode::Search)
+                validateInputRegex();
+        } else if (result == ClipboardResult::MultiLine) {
+            showErrorDialog("粘贴失败", "剪贴板内容含多行，无法粘贴");
+        } else if (result == ClipboardResult::NotText) {
+            showErrorDialog("粘贴失败", "剪贴板内容不是文本");
+        }
+        // ClipboardResult::Empty and ::Error are silently ignored
+        return true;
+    }
+
     // Handle Backspace key
     if (event == Event::Backspace) {
         return handleInputBackspace();
@@ -992,6 +1031,7 @@ void AppController::triggerReprocess(size_t fromFilter) {
             showProgress_          = false;
             progress_              = 1.0;
             reprocessTimeoutShown_ = false;
+            selection_.clear();  // Filter output changed — auto-clear selection
         });
 }
 
@@ -1006,9 +1046,6 @@ void AppController::requestQuit(std::function<void()> exitFn) {
 }
 
 bool AppController::isDialogOpen() const { return showDialog_; }
-
-void AppController::toggleMouseTracking() { mouseTracking_ = !mouseTracking_; }
-bool AppController::isMouseTracking() const { return mouseTracking_; }
 
 void AppController::showErrorDialog(std::string title, std::string body) {
     showDialog_      = true;
@@ -1193,6 +1230,8 @@ void AppController::scrollPane(FocusArea area, int delta) {
 }
 
 void AppController::setFocus(FocusArea area) {
+    if (focus_ != area)
+        selection_.clear();  // Pane switch — auto-clear selection
     focus_ = area;
 }
 
@@ -1200,10 +1239,148 @@ FocusArea AppController::focusArea() const { return focus_; }
 
 void AppController::clickLine(FocusArea area, int rowInPane) {
     if (rowInPane < 0) return;
+    selection_.clear();  // Plain click clears selection
     PaneState&   ps    = (area == FocusArea::Raw) ? rawState_ : filteredState_;
     const int    ph    = (area == FocusArea::Raw) ? lastRawPaneHeight_ : lastFilteredPaneHeight_;
     const size_t total = (area == FocusArea::Raw) ? reader_.lineCount() : chain_.filteredLineCount();
     if (total == 0) return;
     ps.cursor = std::min(ps.scrollOffset + static_cast<size_t>(rowInPane), total - 1);
     clampScroll(ps, total, ph);
+}
+
+// ── SelectionState helpers ────────────────────────────────────────────────────
+
+std::pair<AppController::SelectionPoint, AppController::SelectionPoint>
+AppController::SelectionState::ordered() const {
+    // Order by lineIndex first, then byteOffset.
+    bool anchorFirst = (anchor.lineIndex < current.lineIndex)
+                    || (anchor.lineIndex == current.lineIndex
+                        && anchor.byteOffset <= current.byteOffset);
+    return anchorFirst ? std::make_pair(anchor, current)
+                       : std::make_pair(current, anchor);
+}
+
+// ── Text selection public methods ─────────────────────────────────────────────
+
+void AppController::startSelection(FocusArea pane, size_t lineIndex, size_t byteOffset) {
+    selection_.anchor  = {pane, lineIndex, byteOffset};
+    selection_.current = {pane, lineIndex, byteOffset};
+    selection_.dragging = true;
+    selection_.active   = false;  // Not yet — needs at least one extend
+}
+
+void AppController::extendSelection(size_t lineIndex, size_t byteOffset) {
+    if (!selection_.dragging) return;
+    selection_.current.lineIndex  = lineIndex;
+    selection_.current.byteOffset = byteOffset;
+    // Consider a selection active when anchor != current (either line or offset differs)
+    selection_.active = (selection_.anchor.lineIndex  != selection_.current.lineIndex
+                      || selection_.anchor.byteOffset != selection_.current.byteOffset);
+}
+
+void AppController::finalizeSelection() {
+    selection_.dragging = false;
+    // Keep selection_.active unchanged — user must press Esc or click to dismiss.
+}
+
+void AppController::clearSelection() {
+    selection_.clear();
+}
+
+bool AppController::hasSelection() const {
+    return selection_.active;
+}
+
+bool AppController::isSelectionDragging() const {
+    return selection_.dragging;
+}
+
+void AppController::copySelectionToClipboard() {
+    if (!selection_.active) return;
+    const std::string text = buildSelectedText();
+    if (!text.empty())
+        clipboardCopy(text);
+}
+
+// ── screenColToByteOffset ─────────────────────────────────────────────────────
+// Maps a raw FTXUI mouse m.x (0-based terminal column) to a byte offset within
+// the line content, accounting for the rendered prefix (line-number + cursor
+// arrow) and horizontal scroll.  Returns 0 if the click falls within the prefix.
+
+size_t AppController::screenColToByteOffset(FocusArea pane, size_t lineIndex, int screenCol) const {
+    // Compute the prefix width: [lineNo digits + space] + ["▶ " or "  "].
+    // Matches the formula used by renderLogPane() in render.cpp.
+    int prefixCols = 2;  // cursor arrow "▶ " or "  "
+    if (showLineNumbers_) {
+        const int minW       = AppConfig::global().minLineNoWidth;
+        const int digitCount = static_cast<int>(std::to_string(reader_.lineCount()).size());
+        prefixCols += std::max(digitCount, minW) + 1;  // digits + trailing space
+    }
+
+    const int contentCol = screenCol - prefixCols;
+    if (contentCol < 0) return 0;  // click landed on the prefix — treat as start of line
+
+    // Determine the line content and horizontal scroll for the targeted pane.
+    std::string_view content;
+    size_t hScroll = 0;
+    if (pane == FocusArea::Raw) {
+        const size_t absIdx = rawState_.scrollOffset + lineIndex;
+        if (absIdx >= reader_.lineCount()) return 0;
+        content = reader_.getLine(absIdx + 1);
+        hScroll = rawState_.hScrollOffset;
+    } else {
+        const size_t absIdx = filteredState_.scrollOffset + lineIndex;
+        if (absIdx >= chain_.filteredLineCount()) return 0;
+        const size_t rawLineNo = chain_.filteredLineAt(absIdx);
+        content = reader_.getLine(rawLineNo);
+        hScroll = filteredState_.hScrollOffset;
+    }
+
+    // displayColToByteOffset returns an absolute byte offset within content.
+    // Starting from hScroll, advance contentCol display columns.
+    return displayColToByteOffset(content, hScroll, contentCol);
+}
+
+// ── buildSelectedText ─────────────────────────────────────────────────────────
+// Collects the selected lines from the appropriate source, extracts the byte
+// ranges, and joins them with '\n'.  Line numbers and cursor-arrow prefixes are
+// NOT included.  When a line is folded, the full (unfolded) content is copied.
+
+std::string AppController::buildSelectedText() const {
+    if (!selection_.active) return {};
+
+    auto [startPt, endPt] = selection_.ordered();
+    const FocusArea pane = selection_.anchor.pane;
+
+    // Collect the source lines in the selected range.
+    const size_t scrollOff = (pane == FocusArea::Raw)
+                             ? rawState_.scrollOffset
+                             : filteredState_.scrollOffset;
+
+    std::string result;
+    for (size_t li = startPt.lineIndex; li <= endPt.lineIndex; ++li) {
+        // Compute the absolute pane index.
+        const size_t absIdx = scrollOff + li;
+
+        std::string_view content;
+        if (pane == FocusArea::Raw) {
+            if (absIdx >= reader_.lineCount()) break;
+            content = reader_.getLine(absIdx + 1);
+        } else {
+            if (absIdx >= chain_.filteredLineCount()) break;
+            content = reader_.getLine(chain_.filteredLineAt(absIdx));
+        }
+
+        // Determine the byte range within this line.
+        const size_t byteStart = (li == startPt.lineIndex) ? startPt.byteOffset : 0;
+        const size_t byteEnd   = (li == endPt.lineIndex)   ? endPt.byteOffset   : content.size();
+
+        const size_t safeStart = std::min(byteStart, content.size());
+        const size_t safeEnd   = std::min(byteEnd,   content.size());
+
+        if (!result.empty()) result += '\n';
+        if (safeStart < safeEnd)
+            result += std::string(content.substr(safeStart, safeEnd - safeStart));
+    }
+    return result;
 }

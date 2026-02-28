@@ -28,6 +28,9 @@ add_executable(ttLogViewer_tests
 
     # Config system
     unit/app_config_test.cpp
+
+    # Text selection + clipboard
+    e2e/selection_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE

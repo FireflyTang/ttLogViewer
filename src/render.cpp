@@ -105,7 +105,8 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         parts.push_back(text((ll.highlighted && !searchActive) ? "▶ " : "  "));
         parts.push_back(
             renderColoredLine(ll.content, ll.colors, ll.searchSpans,
-                              ll.folded, contentWidth, hScroll) | flex);
+                              ll.folded, contentWidth, hScroll,
+                              ll.selectionSpans) | flex);
 
         Element row = hbox(std::move(parts));
 
@@ -152,20 +153,20 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
 
 // Always-visible bottom hints row.
 static Element renderHintsLine(const ViewData& data) {
-    if (!data.mouseTracking) {
-        return hbox({ text(" [选文模式]") | color(Color::Yellow),
-                      text("  m:退出选文  ↑↓:移动  Tab:切换区域") | dim });
+    if (data.hasSelection) {
+        return hbox({ text(" [已选择]") | color(Color::Yellow),
+                      text("  Ctrl+C:复制  Esc:取消选择") | dim });
     }
     const bool filterInputActive = (data.inputMode == InputMode::FilterAdd
                                  || data.inputMode == InputMode::FilterEdit);
     const bool searchInputActive = (data.inputMode == InputMode::Search);
     if (filterInputActive) {
-        return text(" Esc:取消  Enter:确认  Tab:切换模式") | dim;
+        return text(" Esc:取消  Enter:确认  Tab:切换模式  Ctrl+V:粘贴") | dim;
     }
     if (searchInputActive) {
-        return text(" Esc:取消  Enter:确认  Tab:正则") | dim;
+        return text(" Esc:取消  Enter:确认  Tab:正则  Ctrl+V:粘贴") | dim;
     }
-    return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域") | dim;
+    return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域  拖拽:选文") | dim;
 }
 
 // Active input row — shown only when input/search is active.
@@ -315,16 +316,23 @@ Component CreateMainComponent(AppController& controller,
             return true;
         }
 
+        // Ctrl+C: copy selection to clipboard (only in normal mode, no dialog)
+        if (event == Event::CtrlC
+                && !controller.isInputActive()
+                && !controller.isDialogOpen()
+                && controller.hasSelection()) {
+            controller.copySelectionToClipboard();
+            return true;
+        }
+
         // Update heights on every event to pick up terminal resize
         {
             auto [dimx, dimy] = Terminal::Size();
             controller.onTerminalResize(dimx, dimy);
         }
 
-        // Mouse events: wheel scroll and click-to-focus
-        // Skipped when mouse tracking is disabled (text-selection mode)
+        // Mouse events: wheel scroll, click-to-focus, and text-selection drag
         if (event.is_mouse()) {
-            if (!controller.isMouseTracking()) return false;
             const auto& m     = event.mouse();
             const int   rawH  = controller.rawPaneHeight();
             const int   filtH = controller.filtPaneHeight();
@@ -343,37 +351,70 @@ Component CreateMainComponent(AppController& controller,
             const bool overRaw  = (m.y >= rawTop  && m.y <= rawBot);
             const bool overFilt = (m.y >= filtTop && m.y <= filtBot);
 
+            // ── Scroll wheel ──────────────────────────────────────────────────
             if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
                 if (m.control) return false;  // pass Ctrl+scroll to terminal (font resize)
                 const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
-                // Scroll the focused pane, not the pane under the mouse cursor.
                 controller.scrollPane(controller.focusArea(), dir);
                 return true;
             }
+
+            // ── Left button press: start a potential drag/selection ───────────
             if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
                 if (overRaw) {
+                    const int    row    = m.y - rawTop;
+                    const size_t byte   = controller.screenColToByteOffset(
+                                             FocusArea::Raw, static_cast<size_t>(row), m.x);
                     controller.setFocus(FocusArea::Raw);
-                    controller.clickLine(FocusArea::Raw, m.y - rawTop);
+                    controller.startSelection(FocusArea::Raw, static_cast<size_t>(row), byte);
                 } else if (overFilt) {
+                    const int    row    = m.y - filtTop;
+                    const size_t byte   = controller.screenColToByteOffset(
+                                             FocusArea::Filtered, static_cast<size_t>(row), m.x);
                     controller.setFocus(FocusArea::Filtered);
-                    controller.clickLine(FocusArea::Filtered, m.y - filtTop);
+                    controller.startSelection(FocusArea::Filtered, static_cast<size_t>(row), byte);
+                } else {
+                    controller.clearSelection();
                 }
                 return true;
             }
+
+            // ── Left button move (drag): extend selection ─────────────────────
+            if (m.button == Mouse::Left && m.motion == Mouse::Moved
+                    && controller.isSelectionDragging()) {
+                // Extend using the anchor pane; clamp row to valid range.
+                const FocusArea anchorPane = controller.focusArea();
+                int row = 0;
+                if (anchorPane == FocusArea::Raw) {
+                    row = std::clamp(m.y - rawTop, 0, rawH - 1);
+                } else {
+                    row = std::clamp(m.y - filtTop, 0, filtH - 1);
+                }
+                const size_t byte = controller.screenColToByteOffset(
+                                        anchorPane, static_cast<size_t>(row), m.x);
+                controller.extendSelection(static_cast<size_t>(row), byte);
+                return true;
+            }
+
+            // ── Left button release: finalize or treat as click ───────────────
+            if (m.button == Mouse::Left && m.motion == Mouse::Released) {
+                if (controller.hasSelection()) {
+                    // Drag produced a real selection: keep it.
+                    controller.finalizeSelection();
+                } else if (controller.isSelectionDragging()) {
+                    // Press + release with no movement: it was a click.
+                    controller.clearSelection();  // cancels the drag state
+                    FocusArea pane = controller.focusArea();
+                    int row = (pane == FocusArea::Raw) ? m.y - rawTop : m.y - filtTop;
+                    if (overRaw || overFilt)
+                        controller.clickLine(pane, row);
+                }
+                return true;
+            }
+
             return false;
         }
 
-        // Dispatch to controller; write ANSI mouse-mode sequences if tracking toggled.
-        const bool prevMouseTracking = controller.isMouseTracking();
-        const bool consumed          = controller.handleKey(event);
-        if (controller.isMouseTracking() != prevMouseTracking) {
-            if (controller.isMouseTracking()) {
-                fputs("\033[?1000h\033[?1003h\033[?1015h\033[?1006h", stdout);
-            } else {
-                fputs("\033[?1000l\033[?1003l\033[?1015l\033[?1006l", stdout);
-            }
-            fflush(stdout);
-        }
-        return consumed;
+        return controller.handleKey(event);
     });
 }

@@ -317,30 +317,50 @@ TEST_F(NavigationTest, PaneHeightRatio6to4SmallTerminal) {
     EXPECT_EQ(ctrl_.filtPaneHeight(), 4);
 }
 
-// ── Mouse tracking toggle (text-selection mode) ───────────────────────────────
+// ── Text selection state ──────────────────────────────────────────────────────
 
-TEST_F(NavigationTest, MouseTrackingEnabledByDefault) {
-    EXPECT_TRUE(ctrl_.isMouseTracking());
-    EXPECT_TRUE(ctrl_.getViewData(5, 5).mouseTracking);
+TEST_F(NavigationTest, NoSelectionByDefault) {
+    EXPECT_FALSE(ctrl_.hasSelection());
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).hasSelection);
 }
 
-TEST_F(NavigationTest, MKeyTogglesMouseTracking) {
-    // First press disables mouse tracking
-    key(ftxui::Event::Character('m'));
-    EXPECT_FALSE(ctrl_.isMouseTracking());
-    EXPECT_FALSE(ctrl_.getViewData(5, 5).mouseTracking);
+TEST_F(NavigationTest, StartExtendFinalizeSelection) {
+    // Simulate a drag: press at line 0 byte 0, extend to line 1 byte 3.
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    EXPECT_FALSE(ctrl_.hasSelection());   // not active yet, needs extend
+    EXPECT_TRUE(ctrl_.isSelectionDragging());
 
-    // Second press re-enables
-    key(ftxui::Event::Character('m'));
-    EXPECT_TRUE(ctrl_.isMouseTracking());
-    EXPECT_TRUE(ctrl_.getViewData(5, 5).mouseTracking);
+    ctrl_.extendSelection(1, 3);
+    EXPECT_TRUE(ctrl_.hasSelection());    // now active (anchor != current)
+
+    ctrl_.finalizeSelection();
+    EXPECT_TRUE(ctrl_.hasSelection());    // still active (user must ESC or click)
+    EXPECT_FALSE(ctrl_.isSelectionDragging());
 }
 
-TEST_F(NavigationTest, MKeyInInputModeIsTyped) {
-    // 'm' in filter-add input should go to the input buffer, not toggle mouse
+TEST_F(NavigationTest, ClearSelectionResetsState) {
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(1, 3);
+    EXPECT_TRUE(ctrl_.hasSelection());
+
+    ctrl_.clearSelection();
+    EXPECT_FALSE(ctrl_.hasSelection());
+    EXPECT_FALSE(ctrl_.isSelectionDragging());
+}
+
+TEST_F(NavigationTest, ViewDataHasSelectionFlag) {
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(0, 3);
+    EXPECT_TRUE(ctrl_.getViewData(5, 5).hasSelection);
+
+    ctrl_.clearSelection();
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).hasSelection);
+}
+
+TEST_F(NavigationTest, MKeyTypedInInputMode) {
+    // 'm' in filter-add input should still go to the input buffer (no special mode)
     key(ftxui::Event::Character('a'));   // enter FilterAdd
     key(ftxui::Event::Character('m'));   // typed into buffer
-    EXPECT_TRUE(ctrl_.isMouseTracking());  // tracking unchanged
     EXPECT_EQ(ctrl_.getViewData(5, 5).inputBuffer, "m");
 }
 
@@ -473,36 +493,41 @@ TEST_F(NavigationTest, XKeyInRawPaneIsNoOp) {
     EXPECT_EQ(highlightedLine(), lineBefore);
 }
 
-// ── ESC exits text-selection mode ────────────────────────────────────────────
+// ── ESC clears selection (higher priority than clearing search) ───────────────
 
-TEST_F(NavigationTest, EscExitsTextSelectionMode) {
-    // Enter text-selection mode via 'm'
-    key(ftxui::Event::Character('m'));
-    EXPECT_FALSE(ctrl_.isMouseTracking());
+TEST_F(NavigationTest, EscClearsActiveSelection) {
+    // Start and commit a selection.
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(1, 3);
+    ctrl_.finalizeSelection();
+    EXPECT_TRUE(ctrl_.hasSelection());
 
-    // ESC must re-enable mouse tracking
+    // ESC must clear the selection.
     key(ftxui::Event::Escape);
-    EXPECT_TRUE(ctrl_.isMouseTracking());
+    EXPECT_FALSE(ctrl_.hasSelection());
 }
 
-TEST_F(NavigationTest, EscWithSearchClearsThenExitsSelectionMode) {
-    // Set up a search keyword first
+TEST_F(NavigationTest, EscPrioritySelectionBeforeSearch) {
+    // Set up a search keyword.
     key(ftxui::Event::Character('/'));
     type("line1");
     key(ftxui::Event::Return);
     EXPECT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty());
 
-    // Enter text-selection mode
-    key(ftxui::Event::Character('m'));
-    EXPECT_FALSE(ctrl_.isMouseTracking());
+    // Also establish a selection.
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(1, 3);
+    ctrl_.finalizeSelection();
+    EXPECT_TRUE(ctrl_.hasSelection());
 
-    // First ESC: clears search (higher priority than text-selection exit)
+    // First ESC: clears selection (higher priority than search).
+    key(ftxui::Event::Escape);
+    EXPECT_FALSE(ctrl_.hasSelection());
+    EXPECT_FALSE(ctrl_.getViewData(5, 5).searchKeyword.empty()); // search still active
+
+    // Second ESC: clears search.
     key(ftxui::Event::Escape);
     EXPECT_TRUE(ctrl_.getViewData(5, 5).searchKeyword.empty());
-
-    // Second ESC: exits text-selection mode
-    key(ftxui::Event::Escape);
-    EXPECT_TRUE(ctrl_.isMouseTracking());
 }
 
 // ── Jump centering ────────────────────────────────────────────────────────────
