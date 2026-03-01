@@ -21,6 +21,9 @@ using namespace ftxui;
 // Display columns occupied by the cursor marker ("▶ " or "  ").
 static constexpr int kCursorMarkerCols = 2;
 
+// Maximum candidate rows shown in the Tab-completion popup (not counting borders/arrow).
+static constexpr size_t kCompletionPopupMaxRows = 3;
+
 // Format a number with thousands separators, e.g. 1234567 → "1,234,567".
 static std::string fmtCount(size_t n) {
     std::string s = std::to_string(n);
@@ -232,8 +235,6 @@ static Element renderActiveInput(const ViewData& data) {
 // Shows max kCompletionPopupMaxRows candidate filenames, with ▲ indicator when items are scrolled past.
 // The 'a' of each candidate aligns with data.completionCol (same column as the
 // filename prefix the user typed in the input line).
-static constexpr size_t kCompletionPopupMaxRows = 3;
-
 static Elements renderCompletionPopup(const ViewData& data) {
     if (!data.showCompletions || data.completions.empty()) return {};
 
@@ -277,9 +278,8 @@ static Elements renderCompletionPopup(const ViewData& data) {
     for (size_t i = startIdx; i < startIdx + showCount; ++i) {
         const bool selected = (i == data.completionIndex);
         std::string entry   = (selected ? ">" : " ") + data.completions[i];
-        // Pad to fixed width.
-        while (entry.size() < maxLen + 1) entry += ' ';
-
+        // Pad to fixed width (O(1), idiomatic).
+        entry.resize(maxLen + 1, ' ');
         Element cell = text(textPad + entry) | (selected ? inverted : nothing);
         rows.push_back(hbox({ text(borderPad), text("│"), cell, text("│") }));
     }

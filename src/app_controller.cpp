@@ -778,7 +778,7 @@ void AppController::handleFileReset() {
     dialogBody_      = "检测到文件被截断或替换。\n是否重新加载?";
     dialogHasChoice_ = true;
 
-    std::string pathCopy = std::string(reader_.filePath());
+    std::string pathCopy{reader_.filePath()};
 
     dialogYesAction_ = [this, pathCopy]() {
         if (reader_.open(pathCopy)) {
@@ -1214,8 +1214,9 @@ void AppController::runSearch(const std::string& keyword) {
         // Reserve space to avoid frequent reallocations during search.
         // Estimate: most searches match fewer than 1/searchReserveFraction of lines,
         // but we cap the allocation at searchReserveMax on very large files.
-        const size_t reserveEstimate = total / static_cast<size_t>(
-            AppConfig::global().searchReserveFraction);
+        const int fraction = AppConfig::global().searchReserveFraction;
+        const size_t reserveEstimate = (fraction > 0)
+            ? total / static_cast<size_t>(fraction) : 0;
         searchResults_.reserve(std::min(reserveEstimate,
                                         AppConfig::global().searchReserveMax));
         for (size_t i = 1; i <= total; ++i) {

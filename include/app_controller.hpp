@@ -221,7 +221,7 @@ private:
 
     // ── Filter selection ──────────────────────────────────────────────────────
     size_t selectedFilter_  = 0;
-    size_t colorPaletteIdx_ = 0;    // Cycles through palette on 'x' in FilterAdd
+    size_t colorPaletteIdx_ = 0;    // Cycles through palette on 'a' (FilterAdd)
 
     // ── Search state ──────────────────────────────────────────────────────────
     std::vector<size_t>       searchResults_;       // 1-based raw line numbers

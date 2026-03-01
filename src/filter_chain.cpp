@@ -129,23 +129,22 @@ size_t FilterChain::filteredLineCountAt(size_t idx) const {
 
 size_t FilterChain::filteredLineCount() const {
     if (filters_.empty()) return reader_.lineCount();
-    // Find the last enabled filter to use its output
-    for (int i = static_cast<int>(filters_.size()) - 1; i >= 0; --i) {
-        if (filters_[static_cast<size_t>(i)].def.enabled)
-            return filters_[static_cast<size_t>(i)].output.size();
-    }
+    // Find the last enabled filter to use its output.
+    auto it = std::find_if(filters_.rbegin(), filters_.rend(),
+                           [](const FilterNode& n) { return n.def.enabled; });
+    if (it != filters_.rend()) return it->output.size();
     return reader_.lineCount();
 }
 
 size_t FilterChain::filteredLineAt(size_t filteredIndex) const {
     if (filters_.empty()) return filteredIndex + 1;
-    for (int i = static_cast<int>(filters_.size()) - 1; i >= 0; --i) {
-        if (filters_[static_cast<size_t>(i)].def.enabled) {
-            const auto& out = filters_[static_cast<size_t>(i)].output;
-            if (filteredIndex < out.size())
-                return static_cast<size_t>(out[filteredIndex]);
-            return 0;  // Out of range
-        }
+    auto it = std::find_if(filters_.rbegin(), filters_.rend(),
+                           [](const FilterNode& n) { return n.def.enabled; });
+    if (it != filters_.rend()) {
+        const auto& out = it->output;
+        if (filteredIndex < out.size())
+            return static_cast<size_t>(out[filteredIndex]);
+        return 0;  // Out of range
     }
     return filteredIndex + 1;
 }
