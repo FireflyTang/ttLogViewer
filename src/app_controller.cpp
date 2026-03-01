@@ -518,7 +518,8 @@ bool AppController::handleKeyGotoLine(const Event& event) {
     // Only accept digits for GotoLine mode
     if (event.is_character() && event.character().size() == 1
         && event.character()[0] >= '0' && event.character()[0] <= '9') {
-        inputBuffer_ += event.character();
+        inputBuffer_.insert(inputCursorPos_, event.character());
+        inputCursorPos_ += 1;
         return true;
     }
 
@@ -653,6 +654,7 @@ void AppController::triggerCompletion() {
         // Single match: fill in directly and hide popup.
         const std::string candidate = completions_[0];
         inputBuffer_ = dir + candidate;
+        inputCursorPos_ = inputBuffer_.size();
         completions_.clear();
         showCompletions_ = false;
         recomputePaneHeights();
@@ -672,6 +674,7 @@ void AppController::acceptCompletion() {
     const std::string candidate = completions_[completionIndex_];
     auto [dir, _unused] = splitPathForCompletion(inputBuffer_);
     inputBuffer_ = dir + candidate;
+    inputCursorPos_ = inputBuffer_.size();
     showCompletions_ = false;
     completions_.clear();
     completionIndex_ = 0;
@@ -891,9 +894,10 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.filteredFocused = !data.rawFocused;
     data.rawHScroll      = rawState_.hScrollOffset;
     data.filtHScroll     = filteredState_.hScrollOffset;
-    data.inputMode       = inputMode_;
-    data.inputPrompt     = inputPrompt_;
-    data.inputBuffer     = inputBuffer_;
+    data.inputMode        = inputMode_;
+    data.inputPrompt      = inputPrompt_;
+    data.inputBuffer      = inputBuffer_;
+    data.inputCursorPos   = inputCursorPos_;
     data.inputValid      = inputValid_;
     data.inputUseRegex   = (inputMode_ == InputMode::Search) ? searchUseRegex_
                                                               : filterInputUseRegex_;
@@ -964,21 +968,9 @@ void AppController::onTerminalResize(int width, int height) {
 void AppController::recomputePaneHeights() {
     if (lastTerminalHeight_ <= 0) return;   // not yet set (test environment)
     const int extra = (inputMode_ != InputMode::None || !searchKeyword_.empty()) ? 1 : 0;
-    // Completion popup rows: borders (2) + min(3, count) content rows + optional ▲ row.
-    int completionRows = 0;
-    if (showCompletions_ && !completions_.empty()) {
-        const int showCount = static_cast<int>(std::min(completions_.size(), size_t(3)));
-        // Compute startIdx to know whether the ▲ indicator is shown.
-        size_t startIdx = 0;
-        if (completionIndex_ >= static_cast<size_t>(showCount))
-            startIdx = completionIndex_ - static_cast<size_t>(showCount) + 1;
-        if (startIdx + static_cast<size_t>(showCount) > completions_.size())
-            startIdx = completions_.size() - static_cast<size_t>(showCount);
-        const bool hasArrow = (startIdx > 0);
-        completionRows = showCount + 2 + (hasArrow ? 1 : 0);
-    }
+    // Completion popup is rendered as a dbox overlay and does not consume pane height.
     const int avail = std::max(2, lastTerminalHeight_
-                                    - AppConfig::global().uiOverheadRows - extra - completionRows);
+                                    - AppConfig::global().uiOverheadRows - extra);
     const int rawH  = static_cast<int>(avail * AppConfig::global().rawPaneFraction);
     lastRawPaneHeight_      = std::max(1, rawH);
     lastFilteredPaneHeight_ = std::max(1, avail - rawH);
@@ -995,6 +987,7 @@ void AppController::enterInputMode(InputMode mode, std::string prompt,
     inputMode_   = mode;
     inputPrompt_ = std::move(prompt);
     inputBuffer_ = std::move(prefill);
+    inputCursorPos_ = inputBuffer_.size();  // place cursor at end of any prefill text
     // Initialize local regex/exclude toggles from filter state (FilterEdit) or defaults.
     const bool isEdit = (mode == InputMode::FilterEdit
                          && selectedFilter_ < chain_.filterCount());
@@ -1010,6 +1003,7 @@ void AppController::exitInputMode() {
     inputMode_          = InputMode::None;
     inputBuffer_.clear();
     inputPrompt_.clear();
+    inputCursorPos_     = 0;
     inputValid_         = false;
     filterInputExclude_ = false;
     // Clear any active completion popup.
@@ -1052,12 +1046,36 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
         return true;
     }
 
-    // Handle Ctrl+V — paste from system clipboard into the input buffer
+    // ── Cursor movement within the input buffer (UTF-8 safe) ──────────────────
+    if (event == Event::ArrowLeft) {
+        if (inputCursorPos_ > 0) {
+            --inputCursorPos_;
+            while (inputCursorPos_ > 0 && !isUtf8Boundary(inputBuffer_, inputCursorPos_))
+                --inputCursorPos_;
+        }
+        return true;
+    }
+    if (event == Event::ArrowRight) {
+        if (inputCursorPos_ < inputBuffer_.size())
+            decodeUtf8Codepoint(inputBuffer_, inputCursorPos_);  // advances past one codepoint
+        return true;
+    }
+    if (event == Event::Home) {
+        inputCursorPos_ = 0;
+        return true;
+    }
+    if (event == Event::End) {
+        inputCursorPos_ = inputBuffer_.size();
+        return true;
+    }
+
+    // Handle Ctrl+V — paste from system clipboard at cursor position
     if (event == Event::CtrlV) {
         std::string pasted;
         const ClipboardResult result = clipboardPaste(pasted);
         if (result == ClipboardResult::Ok) {
-            inputBuffer_ += pasted;
+            inputBuffer_.insert(inputCursorPos_, pasted);
+            inputCursorPos_ += pasted.size();
             if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
                     || inputMode_ == InputMode::Search)
                 validateInputRegex();
@@ -1077,7 +1095,8 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
 
     // Handle character input if allowed
     if (allowCharacters && event.is_character()) {
-        inputBuffer_ += event.character();
+        inputBuffer_.insert(inputCursorPos_, event.character());
+        inputCursorPos_ += event.character().size();
         // Validate for filter and search input modes
         if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
                 || inputMode_ == InputMode::Search) {
@@ -1090,16 +1109,19 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
 }
 
 bool AppController::handleInputBackspace() {
-    if (!inputBuffer_.empty()) {
-        inputBuffer_.pop_back();
-        // Validate for filter and search input modes
-        if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
-                || inputMode_ == InputMode::Search) {
-            validateInputRegex();
-        }
-        return true;
+    if (inputCursorPos_ == 0) return true;  // nothing before cursor
+    // Find the start of the UTF-8 codepoint immediately before the cursor.
+    size_t start = inputCursorPos_ - 1;
+    while (start > 0 && !isUtf8Boundary(inputBuffer_, start))
+        --start;
+    inputBuffer_.erase(start, inputCursorPos_ - start);
+    inputCursorPos_ = start;
+    // Validate for filter and search input modes
+    if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
+            || inputMode_ == InputMode::Search) {
+        validateInputRegex();
     }
-    return false;
+    return true;
 }
 
 // ── Filter helpers ────────────────────────────────────────────────────────────

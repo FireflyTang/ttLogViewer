@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <format>
+#include <optional>
 #include <string>
 
 #include <ftxui/dom/elements.hpp>
@@ -168,6 +169,28 @@ static Element renderHintsLine(const ViewData& data) {
     return text(" q:退出  ↑↓:移动  PgUp/PgDn:翻页  Tab:切换区域  拖拽:选文") | dim;
 }
 
+// Render an input buffer with a block cursor at byte offset cursorPos.
+// The character under the cursor is rendered inverted; a space is shown when at end-of-input.
+static Element renderBufWithCursor(const std::string& buf, size_t cursorPos) {
+    const std::string before(buf, 0, cursorPos);
+    std::string cursorChar;
+    size_t afterStart = cursorPos;
+    if (cursorPos < buf.size()) {
+        size_t p = cursorPos;
+        decodeUtf8Codepoint(buf, p);
+        cursorChar = buf.substr(cursorPos, p - cursorPos);
+        afterStart = p;
+    } else {
+        cursorChar = " ";  // block cursor at end-of-input
+    }
+    const std::string after(buf, afterStart);
+    return hbox({
+        text(before)     | bold,
+        text(cursorChar) | bold | inverted,
+        text(after)      | bold,
+    });
+}
+
 // Active input row — shown only when input/search is active.
 static Element renderActiveInput(const ViewData& data) {
     switch (data.inputMode) {
@@ -187,10 +210,11 @@ static Element renderActiveInput(const ViewData& data) {
             if (data.inputUseRegex) {
                 Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
                 return hbox({ text(modeTag) | dim, text("  "),
-                              text(data.inputBuffer) | bold, std::move(dot) });
+                              renderBufWithCursor(data.inputBuffer, data.inputCursorPos),
+                              std::move(dot) });
             }
             return hbox({ text(modeTag) | dim, text("  "),
-                          text(data.inputBuffer) | bold });
+                          renderBufWithCursor(data.inputBuffer, data.inputCursorPos) });
         }
 
         case InputMode::FilterAdd:
@@ -207,27 +231,29 @@ static Element renderActiveInput(const ViewData& data) {
             if (data.inputUseRegex) {
                 Element dot = text(" ●") | color(data.inputValid ? Color::Green : Color::Red);
                 return hbox({ std::move(modeElem), text("  "),
-                              text(data.inputPrompt), text(data.inputBuffer) | bold,
+                              text(data.inputPrompt),
+                              renderBufWithCursor(data.inputBuffer, data.inputCursorPos),
                               std::move(dot) });
             }
             return hbox({ std::move(modeElem), text("  "),
-                          text(data.inputPrompt), text(data.inputBuffer) | bold });
+                          text(data.inputPrompt),
+                          renderBufWithCursor(data.inputBuffer, data.inputCursorPos) });
         }
 
         case InputMode::GotoLine:
         case InputMode::OpenFile:
         case InputMode::ExportConfirm:
-            return hbox({ text(data.inputPrompt), text(data.inputBuffer) | bold, text("_") });
+            return hbox({ text(data.inputPrompt),
+                          renderBufWithCursor(data.inputBuffer, data.inputCursorPos) });
     }
     return text("");
 }
 
-// Completion popup: appears ABOVE the input line (upward popup).
+// Completion popup: rendered as a dbox overlay above the active input line.
 // Shows max kCompletionPopupMaxRows candidate filenames, with ▲ indicator when items are scrolled past.
-// The 'a' of each candidate aligns with data.completionCol (same column as the
-// filename prefix the user typed in the input line).
-static Elements renderCompletionPopup(const ViewData& data) {
-    if (!data.showCompletions || data.completions.empty()) return {};
+// Returns nullopt when the popup should not be shown.
+static std::optional<Element> renderCompletionPopup(const ViewData& data) {
+    if (!data.showCompletions || data.completions.empty()) return std::nullopt;
 
     const size_t total     = data.completions.size();
     const size_t showCount = std::min(total, kCompletionPopupMaxRows);
@@ -276,12 +302,12 @@ static Elements renderCompletionPopup(const ViewData& data) {
         rows.push_back(hbox({ text(borderPad), text("│"), cell, text("│") }));
     }
 
-    // Assemble with top/bottom border.
+    // Assemble all rows with top/bottom border into a single vbox element.
     Elements all;
     all.push_back(hbox({ text(borderPad), text("┌" + hLine + "┐") }));
     for (auto& r : rows) all.push_back(std::move(r));
     all.push_back(hbox({ text(borderPad), text("└" + hLine + "┘") }));
-    return all;
+    return vbox(std::move(all));
 }
 
 static Element renderDialogOverlay(const ViewData& data, Element base) {
@@ -475,15 +501,24 @@ Component CreateMainComponent(AppController& controller,
             separator(),
             renderFilterBar(data.filterTags),
         };
-        // Completion popup appears ABOVE the input line (inserted just before it).
-        if (data.showCompletions) {
-            for (auto& row : renderCompletionPopup(data))
-                elems.push_back(std::move(row));
-        }
         if (inputRowActive) elems.push_back(renderActiveInput(data));
         elems.push_back(renderHintsLine(data));
 
         Element layout = vbox(std::move(elems));
+
+        // Completion popup: dbox overlay floating above the input line.
+        // The popup sits in a layer that does not affect pane heights.
+        // Bottom spacer = 2 rows (active-input + hints), always present when popup is shown.
+        if (auto popup = renderCompletionPopup(data)) {
+            Element overlay = vbox({
+                filler(),
+                std::move(*popup),
+                // 2-line spacer to align the popup bottom with the top of the input row.
+                size(HEIGHT, EQUAL, 2)(text("")),
+            });
+            layout = dbox({ std::move(layout), std::move(overlay) });
+        }
+
         layout = renderDialogOverlay(data, layout);
         layout = renderProgressOverlay(data, layout);
 

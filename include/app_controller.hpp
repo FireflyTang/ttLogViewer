@@ -82,12 +82,13 @@ struct ViewData {
     std::vector<FilterTag> filterTags;
 
     // ── Input line ────────────────────────────────────────────────────────────
-    InputMode   inputMode     = InputMode::None;
+    InputMode   inputMode      = InputMode::None;
     std::string inputPrompt;
     std::string inputBuffer;
-    bool        inputValid    = false;
-    bool        inputUseRegex = false;  // regex mode for the active input (filter or search)
-    bool        inputExclude  = false;  // exclude mode for filter add/edit (Ctrl+R toggle)
+    size_t      inputCursorPos = 0;     // byte offset of the text cursor within inputBuffer
+    bool        inputValid     = false;
+    bool        inputUseRegex  = false;  // regex mode for the active input (filter or search)
+    bool        inputExclude   = false;  // exclude mode for filter add/edit (Ctrl+R toggle)
 
     // ── Dialog overlay ────────────────────────────────────────────────────────
     bool        showDialog      = false;
@@ -212,10 +213,11 @@ private:
     FocusArea  focus_     = FocusArea::Raw;
 
     // ── Input state ───────────────────────────────────────────────────────────
-    InputMode   inputMode_          = InputMode::None;
+    InputMode   inputMode_           = InputMode::None;
     std::string inputBuffer_;
     std::string inputPrompt_;
-    bool        inputValid_         = false;
+    size_t      inputCursorPos_      = 0;  // byte offset of cursor within inputBuffer_
+    bool        inputValid_          = false;
     bool        filterInputUseRegex_ = false;  // local regex mode during filter add/edit
     bool        filterInputExclude_  = false;  // local exclude mode during filter add/edit
 
