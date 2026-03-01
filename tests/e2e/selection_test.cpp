@@ -235,3 +235,102 @@ TEST_F(SelectionTest, SetFocusSamePaneDoesNotClear) {
     ctrl_.setFocus(FocusArea::Raw);  // Same pane — should not clear
     EXPECT_TRUE(ctrl_.hasSelection());
 }
+
+// ── #22: lineIndex is absolute (not viewport-relative) ───────────────────────
+
+TEST_F(SelectionTest, AbsoluteLineIndexWorksWithScrollOffset) {
+    // Use pane height 3 with 5 lines so scrolling is possible.
+    // scrollPane(+4) → cursor=4, clampScroll with ph=3 → scrollOffset=2.
+    ctrl_.getViewData(3, 3);
+    ctrl_.scrollPane(FocusArea::Raw, 4);
+    ASSERT_EQ(ctrl_.paneScrollOffset(FocusArea::Raw), 2u) << "precondition: scrollOffset must be 2";
+
+    // Select absolute lines 2..3 (which map to viewport rows 0..1 at scrollOffset=2).
+    ctrl_.startSelection(FocusArea::Raw, 2, 0);
+    ctrl_.extendSelection(3, 4);
+    ctrl_.finalizeSelection();
+    EXPECT_TRUE(ctrl_.hasSelection());
+
+    auto data = ctrl_.getViewData(3, 3);
+    // rawPane[0] → absIdx=2: selected
+    ASSERT_GE(data.rawPane.size(), 2u);
+    EXPECT_FALSE(data.rawPane[0].selectionSpans.empty()) << "line at absIdx=2 should be selected";
+    EXPECT_FALSE(data.rawPane[1].selectionSpans.empty()) << "line at absIdx=3 should be selected";
+    // rawPane[2] → absIdx=4: not selected
+    if (data.rawPane.size() > 2) {
+        EXPECT_TRUE(data.rawPane[2].selectionSpans.empty()) << "line at absIdx=4 should not be selected";
+    }
+}
+
+TEST_F(SelectionTest, SelectionDoesNotDriftOnScroll) {
+    // Select absolute line 0 bytes 0-4, then scroll so line 0 leaves the viewport.
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(0, 4);
+    ctrl_.finalizeSelection();
+    EXPECT_TRUE(ctrl_.hasSelection());
+
+    // Use pane height 3; scrollPane(+4) forces scrollOffset=2.
+    ctrl_.getViewData(3, 3);
+    ctrl_.scrollPane(FocusArea::Raw, 4);
+    ASSERT_EQ(ctrl_.paneScrollOffset(FocusArea::Raw), 2u) << "precondition: scrollOffset must be 2";
+
+    // Now the viewport shows absolute lines 2,3,4 — none of which are selected (line 0 was).
+    auto data = ctrl_.getViewData(3, 3);
+    ASSERT_GE(data.rawPane.size(), 1u);
+    for (size_t i = 0; i < data.rawPane.size(); ++i) {
+        EXPECT_TRUE(data.rawPane[i].selectionSpans.empty())
+            << "viewport row " << i << " (absIdx=" << (2+i) << ") must not show stale selection";
+    }
+}
+
+// ── #22: paneScrollOffset accessor ───────────────────────────────────────────
+
+TEST_F(SelectionTest, PaneScrollOffsetReflectsState) {
+    // Use pane height 3 with 5 lines so scrollPane actually changes scrollOffset.
+    ctrl_.getViewData(3, 3);
+    EXPECT_EQ(ctrl_.paneScrollOffset(FocusArea::Raw), 0u);
+    ctrl_.scrollPane(FocusArea::Raw, 4);  // cursor=4, clampScroll → scrollOffset=2
+    EXPECT_EQ(ctrl_.paneScrollOffset(FocusArea::Raw), 2u);
+}
+
+// ── #22: scrollHorizontal accessor ───────────────────────────────────────────
+
+TEST_F(SelectionTest, ScrollHorizontalIncreasesOffset) {
+    auto data0 = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(data0.rawHScroll, 0u);
+
+    ctrl_.scrollHorizontal(FocusArea::Raw, 4);
+    auto data1 = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(data1.rawHScroll, 4u);
+}
+
+TEST_F(SelectionTest, ScrollHorizontalClampsAtZero) {
+    ctrl_.scrollHorizontal(FocusArea::Raw, 4);
+    ctrl_.scrollHorizontal(FocusArea::Raw, -10);  // Should clamp at 0
+    auto data = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(data.rawHScroll, 0u);
+}
+
+// ── #22: screenColToByteOffset uses absolute index ───────────────────────────
+
+TEST_F(SelectionTest, ScreenColToByteOffsetAbsoluteIndex) {
+    // With scrollOffset=0, absolute index 0 = first line "line1abc"
+    // prefixColWidth() with line numbers (default): at least 2 (arrow) + digits + 1 (space)
+    // We just verify it doesn't crash and returns a reasonable value.
+    const size_t byte = ctrl_.screenColToByteOffset(FocusArea::Raw, 0, 10);
+    EXPECT_LT(byte, 20u);  // "line1abc" is 8 bytes + hScroll handling
+}
+
+TEST_F(SelectionTest, ScreenColToByteOffsetScrolledPane) {
+    // Scroll to line 2 (absIdx=2 = "line3ghi").
+    ctrl_.scrollPane(FocusArea::Raw, 2);
+    // With absolute index 2, should return byte offset for that line.
+    const size_t byte = ctrl_.screenColToByteOffset(FocusArea::Raw, 2, 10);
+    EXPECT_LT(byte, 20u);  // "line3ghi" is 8 bytes
+}
+
+TEST_F(SelectionTest, ScreenColToByteOffsetOutOfBoundsReturnsZero) {
+    // Absolute index beyond total lines should return 0 safely.
+    const size_t byte = ctrl_.screenColToByteOffset(FocusArea::Raw, 9999, 10);
+    EXPECT_EQ(byte, 0u);
+}

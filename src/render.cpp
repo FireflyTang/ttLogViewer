@@ -16,6 +16,11 @@
 
 using namespace ftxui;
 
+// ── File-scope rendering constants ────────────────────────────────────────────
+
+// Display columns occupied by the cursor marker ("▶ " or "  ").
+static constexpr int kCursorMarkerCols = 2;
+
 // Format a number with thousands separators, e.g. 1234567 → "1,234,567".
 static std::string fmtCount(size_t n) {
     std::string s = std::to_string(n);
@@ -92,7 +97,7 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
     for (const auto& ll : lines) {
         Elements parts;
         // Compute the prefix width so renderColoredLine can reserve space for "…"
-        int prefixCols = 2;  // "▶ " or "  "
+        int prefixCols = kCursorMarkerCols;  // "▶ " or "  "
         if (showLineNumbers)
             prefixCols += maxLineNoW + 1;
         int contentWidth = terminalWidth > prefixCols ? terminalWidth - prefixCols : 0;
@@ -223,6 +228,70 @@ static Element renderActiveInput(const ViewData& data) {
     return text("");
 }
 
+// Completion popup: appears ABOVE the input line (upward popup).
+// Shows max kCompletionPopupMaxRows candidate filenames, with ▲ indicator when items are scrolled past.
+// The 'a' of each candidate aligns with data.completionCol (same column as the
+// filename prefix the user typed in the input line).
+static constexpr size_t kCompletionPopupMaxRows = 3;
+
+static Elements renderCompletionPopup(const ViewData& data) {
+    if (!data.showCompletions || data.completions.empty()) return {};
+
+    const size_t total     = data.completions.size();
+    const size_t showCount = std::min(total, kCompletionPopupMaxRows);
+
+    // Sliding window: selected item is at the bottom (closest to input line).
+    size_t startIdx = 0;
+    if (data.completionIndex >= showCount)
+        startIdx = data.completionIndex - showCount + 1;
+    if (startIdx + showCount > total)
+        startIdx = total - showCount;
+
+    // The popup border '│ ' is 2 columns to the LEFT of the candidate text,
+    // so the text first character lands exactly at completionCol.
+    const int textIndent   = std::max(0, data.completionCol);
+    const int borderIndent = std::max(0, textIndent - 2);
+    const std::string borderPad(static_cast<size_t>(borderIndent), ' ');
+    const std::string textPad  (static_cast<size_t>(textIndent - borderIndent), ' ');
+
+    // Determine popup width from longest visible candidate.
+    size_t maxLen = 0;
+    for (size_t i = startIdx; i < startIdx + showCount; ++i)
+        maxLen = std::max(maxLen, data.completions[i].size());
+    maxLen = std::max(maxLen, size_t(1));  // minimum 1
+
+    // '─' (U+2500) is 3 bytes in UTF-8; build the border line by string concatenation.
+    std::string hLine;
+    hLine.reserve((maxLen + 2) * 3);
+    for (size_t i = 0; i < maxLen + 2; ++i) hLine += "─";
+
+    Elements rows;
+
+    // ▲ indicator: shown when items exist above the visible window.
+    if (startIdx > 0) {
+        const std::string arrowLine = " ▲" + std::string(maxLen, ' ');
+        rows.push_back(hbox({ text(borderPad), text("│"), text(arrowLine), text("│") }));
+    }
+
+    // Content rows.
+    for (size_t i = startIdx; i < startIdx + showCount; ++i) {
+        const bool selected = (i == data.completionIndex);
+        std::string entry   = (selected ? ">" : " ") + data.completions[i];
+        // Pad to fixed width.
+        while (entry.size() < maxLen + 1) entry += ' ';
+
+        Element cell = text(textPad + entry) | (selected ? inverted : nothing);
+        rows.push_back(hbox({ text(borderPad), text("│"), cell, text("│") }));
+    }
+
+    // Assemble with top/bottom border.
+    Elements all;
+    all.push_back(hbox({ text(borderPad), text("┌" + hLine + "┐") }));
+    for (auto& r : rows) all.push_back(std::move(r));
+    all.push_back(hbox({ text(borderPad), text("└" + hLine + "┘") }));
+    return all;
+}
+
 static Element renderDialogOverlay(const ViewData& data, Element base) {
     if (!data.showDialog) return base;
 
@@ -254,6 +323,125 @@ static Element renderProgressOverlay(const ViewData& data, Element base) {
     }) | border;
 
     return dbox({ base, bar | center });
+}
+
+// ── Layout row constants ───────────────────────────────────────────────────────
+//
+// The two pane areas occupy fixed row slots within the terminal:
+//   row 0          : status bar
+//   row 1          : separator
+//   rows 2..1+rawH : raw pane       (rawTop = 2)
+//   row  2+rawH    : separator
+//   rows 3+rawH..2+rawH+filtH : filtered pane  (filtTop = 3 + rawH)
+//
+// These values are used by both the renderer and the mouse-event handler.
+// Keep them in sync with the vbox element order in CreateMainComponent.
+
+static constexpr int kStatusBarRows = 2;  // status bar + separator above raw pane
+
+// ── Mouse event handler ───────────────────────────────────────────────────────
+//
+// Extracted from CatchEvent lambda to keep CreateMainComponent readable.
+// Returns true if the event was consumed.
+
+static bool handleMouseEvent(AppController& controller, Event event) {
+    auto& m = event.mouse();
+    const int   rawH = controller.rawPaneHeight();
+    const int   filtH = controller.filtPaneHeight();
+
+    const int rawTop  = kStatusBarRows;
+    const int rawBot  = rawTop + rawH - 1;
+    const int filtTop = rawTop + rawH + 1;  // +1 for separator
+    const int filtBot = filtTop + filtH - 1;
+
+    const bool overRaw  = (m.y >= rawTop  && m.y <= rawBot);
+    const bool overFilt = (m.y >= filtTop && m.y <= filtBot);
+
+    // ── Scroll wheel ──────────────────────────────────────────────────────────
+    if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
+        if (m.control) return false;  // pass Ctrl+scroll to terminal (font resize)
+        const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
+        controller.scrollPane(controller.focusArea(), dir);
+        return true;
+    }
+
+    // ── Left button press: start a potential drag/selection ───────────────────
+    if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
+        if (overRaw) {
+            const int    row    = m.y - rawTop;
+            const size_t absIdx = controller.paneScrollOffset(FocusArea::Raw)
+                                  + static_cast<size_t>(row);
+            const size_t byte   = controller.screenColToByteOffset(
+                                      FocusArea::Raw, absIdx, m.x);
+            controller.setFocus(FocusArea::Raw);
+            controller.startSelection(FocusArea::Raw, absIdx, byte);
+        } else if (overFilt) {
+            const int    row    = m.y - filtTop;
+            const size_t absIdx = controller.paneScrollOffset(FocusArea::Filtered)
+                                  + static_cast<size_t>(row);
+            const size_t byte   = controller.screenColToByteOffset(
+                                      FocusArea::Filtered, absIdx, m.x);
+            controller.setFocus(FocusArea::Filtered);
+            controller.startSelection(FocusArea::Filtered, absIdx, byte);
+        } else {
+            controller.clearSelection();
+        }
+        return true;
+    }
+
+    // ── Left button move (drag): extend selection + auto-scroll ───────────────
+    if (m.button == Mouse::Left && m.motion == Mouse::Moved
+            && controller.isSelectionDragging()) {
+        const FocusArea anchorPane = controller.focusArea();
+        const int paneTop = (anchorPane == FocusArea::Raw) ? rawTop : filtTop;
+        const int paneH   = (anchorPane == FocusArea::Raw) ? rawH   : filtH;
+
+        // ── Vertical auto-scroll ──────────────────────────────────────────────
+        int rowInPane;
+        if (m.y < paneTop) {
+            controller.scrollPane(anchorPane, -1);
+            rowInPane = 0;
+        } else if (m.y >= paneTop + paneH) {
+            controller.scrollPane(anchorPane, +1);
+            rowInPane = paneH - 1;
+        } else {
+            rowInPane = m.y - paneTop;
+        }
+
+        // ── Horizontal auto-scroll ────────────────────────────────────────────
+        const int prefixCols = controller.prefixColWidth();
+        const int termW      = controller.terminalWidth();
+        const int hStep      = AppConfig::global().hScrollStep;
+        if (m.x < prefixCols) {
+            controller.scrollHorizontal(anchorPane, -hStep);
+        } else if (m.x >= termW) {
+            controller.scrollHorizontal(anchorPane, +hStep);
+        }
+
+        // ── Extend selection using post-scroll absolute index ─────────────────
+        const size_t newScrollOff = controller.paneScrollOffset(anchorPane);
+        const size_t absIdx       = newScrollOff + static_cast<size_t>(rowInPane);
+        const size_t byte         = controller.screenColToByteOffset(
+                                        anchorPane, absIdx, m.x);
+        controller.extendSelection(absIdx, byte);
+        return true;
+    }
+
+    // ── Left button release: finalize or treat as click ───────────────────────
+    if (m.button == Mouse::Left && m.motion == Mouse::Released) {
+        if (controller.hasSelection()) {
+            controller.finalizeSelection();
+        } else if (controller.isSelectionDragging()) {
+            controller.clearSelection();
+            FocusArea pane = controller.focusArea();
+            int row = (pane == FocusArea::Raw) ? m.y - rawTop : m.y - filtTop;
+            if (overRaw || overFilt)
+                controller.clickLine(pane, row);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 // ── CreateMainComponent ────────────────────────────────────────────────────────
@@ -295,6 +483,11 @@ Component CreateMainComponent(AppController& controller,
             separator(),
             renderFilterBar(data.filterTags),
         };
+        // Completion popup appears ABOVE the input line (inserted just before it).
+        if (data.showCompletions) {
+            for (auto& row : renderCompletionPopup(data))
+                elems.push_back(std::move(row));
+        }
         if (inputRowActive) elems.push_back(renderActiveInput(data));
         elems.push_back(renderHintsLine(data));
 
@@ -332,88 +525,8 @@ Component CreateMainComponent(AppController& controller,
         }
 
         // Mouse events: wheel scroll, click-to-focus, and text-selection drag
-        if (event.is_mouse()) {
-            const auto& m     = event.mouse();
-            const int   rawH  = controller.rawPaneHeight();
-            const int   filtH = controller.filtPaneHeight();
-
-            // Layout row boundaries (0-based):
-            //   row 0          : status bar
-            //   row 1          : separator
-            //   rows 2..1+rawH : raw pane
-            //   row  2+rawH    : separator
-            //   rows 3+rawH..2+rawH+filtH : filtered pane
-            const int rawTop  = 2;
-            const int rawBot  = 1 + rawH;
-            const int filtTop = 3 + rawH;
-            const int filtBot = 2 + rawH + filtH;
-
-            const bool overRaw  = (m.y >= rawTop  && m.y <= rawBot);
-            const bool overFilt = (m.y >= filtTop && m.y <= filtBot);
-
-            // ── Scroll wheel ──────────────────────────────────────────────────
-            if (m.button == Mouse::WheelUp || m.button == Mouse::WheelDown) {
-                if (m.control) return false;  // pass Ctrl+scroll to terminal (font resize)
-                const int dir = (m.button == Mouse::WheelDown) ? 1 : -1;
-                controller.scrollPane(controller.focusArea(), dir);
-                return true;
-            }
-
-            // ── Left button press: start a potential drag/selection ───────────
-            if (m.button == Mouse::Left && m.motion == Mouse::Pressed) {
-                if (overRaw) {
-                    const int    row    = m.y - rawTop;
-                    const size_t byte   = controller.screenColToByteOffset(
-                                             FocusArea::Raw, static_cast<size_t>(row), m.x);
-                    controller.setFocus(FocusArea::Raw);
-                    controller.startSelection(FocusArea::Raw, static_cast<size_t>(row), byte);
-                } else if (overFilt) {
-                    const int    row    = m.y - filtTop;
-                    const size_t byte   = controller.screenColToByteOffset(
-                                             FocusArea::Filtered, static_cast<size_t>(row), m.x);
-                    controller.setFocus(FocusArea::Filtered);
-                    controller.startSelection(FocusArea::Filtered, static_cast<size_t>(row), byte);
-                } else {
-                    controller.clearSelection();
-                }
-                return true;
-            }
-
-            // ── Left button move (drag): extend selection ─────────────────────
-            if (m.button == Mouse::Left && m.motion == Mouse::Moved
-                    && controller.isSelectionDragging()) {
-                // Extend using the anchor pane; clamp row to valid range.
-                const FocusArea anchorPane = controller.focusArea();
-                int row = 0;
-                if (anchorPane == FocusArea::Raw) {
-                    row = std::clamp(m.y - rawTop, 0, rawH - 1);
-                } else {
-                    row = std::clamp(m.y - filtTop, 0, filtH - 1);
-                }
-                const size_t byte = controller.screenColToByteOffset(
-                                        anchorPane, static_cast<size_t>(row), m.x);
-                controller.extendSelection(static_cast<size_t>(row), byte);
-                return true;
-            }
-
-            // ── Left button release: finalize or treat as click ───────────────
-            if (m.button == Mouse::Left && m.motion == Mouse::Released) {
-                if (controller.hasSelection()) {
-                    // Drag produced a real selection: keep it.
-                    controller.finalizeSelection();
-                } else if (controller.isSelectionDragging()) {
-                    // Press + release with no movement: it was a click.
-                    controller.clearSelection();  // cancels the drag state
-                    FocusArea pane = controller.focusArea();
-                    int row = (pane == FocusArea::Raw) ? m.y - rawTop : m.y - filtTop;
-                    if (overRaw || overFilt)
-                        controller.clickLine(pane, row);
-                }
-                return true;
-            }
-
-            return false;
-        }
+        if (event.is_mouse())
+            return handleMouseEvent(controller, event);
 
         return controller.handleKey(event);
     });

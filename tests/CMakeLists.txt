@@ -31,6 +31,12 @@ add_executable(ttLogViewer_tests
 
     # Text selection + clipboard
     e2e/selection_test.cpp
+
+    # Tab completion
+    e2e/completion_test.cpp
+
+    # Pre-1.0 quality: ESC priority, GoTo boundaries, exclude filter
+    e2e/esc_priority_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE

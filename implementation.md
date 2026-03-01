@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.8 + post-release 修复（待发版为 v0.9.9）
-> 测试：342 个，全部通过
+> 版本：v0.9.9（待发版）
+> 测试：379 个，全部通过
 > 最后更新：2026-03
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -46,7 +46,7 @@ ttLogViewer/
 │   ├── i_filter_chain.hpp      # FilterChain 抽象接口
 │   ├── log_reader.hpp          # LogReader 实现声明（111行）
 │   ├── filter_chain.hpp        # FilterChain + FilterNode（108行）
-│   ├── app_controller.hpp      # AppController + ViewData + PaneState（235行）
+│   ├── app_controller.hpp      # AppController + ViewData + PaneState（356行）
 │   ├── app_config.hpp          # AppConfig 全局配置单例（75行）
 │   ├── render.hpp              # CreateMainComponent 声明（11行）
 │   └── render_utils.hpp        # renderColoredLine 等工具（37行）
@@ -55,8 +55,8 @@ ttLogViewer/
 │   ├── main.cpp                # 入口：loadGlobal → 构造四层 → screen.Loop（74行）
 │   ├── log_reader.cpp          # mmap + IndexThread + FileWatcher（397行）
 │   ├── filter_chain.cpp        # FilterNode 链 + ReprocessThread（454行）
-│   ├── app_controller.cpp      # 键盘分发 + 状态管理（901行）
-│   ├── render.cpp              # FTXUI 组件树组装（230行）
+│   ├── app_controller.cpp      # 键盘分发 + 状态管理（1565行）
+│   ├── render.cpp              # FTXUI 组件树组装（512行）
 │   ├── render_utils.cpp        # UTF-8 颜色渲染工具（81行）
 │   ├── app_config.cpp          # JSON 配置加载（68行）
 │   └── CMakeLists.txt
@@ -89,17 +89,18 @@ ttLogViewer/
 │       ├── search_test.cpp
 │       ├── input_flow_test.cpp
 │       ├── session_test.cpp
-│       └── comprehensive_test.cpp
+│       ├── comprehensive_test.cpp
+│       ├── selection_test.cpp      # 文本选区 + 拖拽自动滚动（#20/#22）
+│       ├── completion_test.cpp     # 文件路径 Tab 补全（#10）
+│       └── esc_priority_test.cpp   # ESC 优先级链 + GoTo 边界 + 排除过滤器
 │
-├── docs/
-│   ├── design.md               # 完整设计文档（功能 + 接口 + 测试 + 配置）
-│   ├── implementation.md       # 本文件（实现报告）
-│   ├── phase1/2/3.md           # 各阶段实现计划（历史参考）
-│   └── review_notes.md         # 早期设计审查（已解决，可归档）
-│
+├── design.md                   # 完整设计文档（功能 + 接口 + 测试 + 配置）
+├── implementation.md           # 本文件（实现报告）
+├── README.md                   # 用户文档（构建、快捷键、配置）
+├── CLAUDE.md                   # Claude 开发规范
 ├── examples/                   # 示例日志文件（测试用）
-├── CMakeLists.txt              # 根构建文件
-└── CLAUDE.md                   # Claude 开发规范
+├── scripts/                    # 构建/发布脚本
+└── CMakeLists.txt              # 根构建文件（含版本号）
 ```
 
 ---
@@ -416,7 +417,7 @@ FTXUI 的 `HandleTask` 对三种任务类型的帧失效行为不同：
 1. 在 `AppConfig`（`include/app_config.hpp`）结构体中添加字段和默认值
 2. 在 `AppConfig::loadFromFile()`（`src/app_config.cpp`）中添加 `j.value("fieldName", currentValue)` 加载行
 3. 在使用处改用 `AppConfig::global().newField`
-4. 在 `docs/design.md` → 配置系统章节的字段表中追加记录
+4. 在 `design.md` → 配置系统章节的字段表中追加记录
 5. 更新 `README.md` 的配置示例 JSON
 
 ### 6.5 扩展 Session JSON
@@ -609,5 +610,152 @@ clearSelection  → active=false, dragging=false
 ### 10.8 未来功能（已记录）
 
 - Linux/macOS 剪贴板集成（xclip/xsel/wl-clipboard/pbcopy）
-- 拖拽时自动滚动（目前拖到窗格边界不会滚动）
 - Shift+点击扩展选区（已明确不做）
+
+---
+
+## 11. SelectionPoint 绝对行号重构 + 拖拽自动滚动（v0.9.9，Issue #22）
+
+### 11.1 根本 Bug：lineIndex 语义歧义
+
+**原有语义**：`SelectionPoint.lineIndex` 存储的是窗格可见区内的相对行号（0 = scrollOffset 处的行）。
+这导致两个隐患：
+1. **选区高亮漂移**：键盘滚动改变 `scrollOffset` 后，相对行号对应的绝对行变了，高亮出现在错误位置。
+2. **自动滚动无法实现**：自动滚动会改变 `scrollOffset`，导致 lineIndex 指向的绝对行立即错位。
+
+**修复**：`lineIndex` 语义改为**绝对行号**（0-based，与 `reader_.getLine(lineIndex+1)` 直接对应）。
+
+### 11.2 同步修改的位置
+
+| 位置 | 旧逻辑 | 新逻辑 |
+|------|--------|--------|
+| `CatchEvent Left+Pressed` | `startSelection(pane, row, byte)` where `row = m.y - paneTop` | `absIdx = scrollOff + row`; `startSelection(pane, absIdx, byte)` |
+| `CatchEvent Left+Moved` | `extendSelection(clamp(row), byte)` | 自动滚动后 `extendSelection(newScrollOff + rowInPane, byte)` |
+| `screenColToByteOffset` | `content = reader_.getLine(scrollOffset + lineIndex + 1)` | `content = reader_.getLine(lineIndex + 1)` (lineIndex is absolute) |
+| `buildSelectedText` | `absIdx = scrollOff + li` | `absIdx = li` 直接用 |
+| `selSpans` lambda | `sliceIdx == startPt.lineIndex` | `absIdx = first + sliceIdx`; 与 anchor/current 比较 |
+
+### 11.3 新增 AppController 公有方法
+
+```cpp
+size_t paneScrollOffset(FocusArea area) const;   // 当前垂直滚动偏移
+int    terminalWidth() const;                     // 最后已知终端宽度（inline）
+int    prefixColWidth() const;                    // 行号+箭头前缀宽度
+void   scrollHorizontal(FocusArea area, int deltaBytes);  // 横向滚动
+```
+
+`prefixColWidth()` 与 `screenColToByteOffset` 使用相同的计算逻辑（行号宽度 + "▶ "），确保点击精度。
+
+### 11.4 自动滚动逻辑（render.cpp CatchEvent Left+Moved）
+
+```
+// 垂直自动滚动
+if (m.y < paneTop)              → scrollPane(pane, -1); rowInPane = 0
+else if (m.y >= paneTop + paneH) → scrollPane(pane, +1); rowInPane = paneH-1
+else                             → rowInPane = m.y - paneTop
+
+// 水平自动滚动
+if (m.x < prefixColWidth())      → scrollHorizontal(pane, -hScrollStep)
+else if (m.x >= terminalWidth()) → scrollHorizontal(pane, +hScrollStep)
+
+// 延伸选区（使用滚动后的绝对索引）
+newScrollOff = paneScrollOffset(pane)
+absIdx = newScrollOff + rowInPane
+extendSelection(absIdx, screenColToByteOffset(pane, absIdx, m.x))
+```
+
+`hScrollStep` 来自 `AppConfig::global().hScrollStep`（默认 4 字节），与键盘水平滚动步长一致。
+
+### 11.5 测试覆盖
+
+新增 8 个测试（`tests/e2e/selection_test.cpp`）：
+
+| 测试 | 验证内容 |
+|------|---------|
+| `AbsoluteLineIndexWorksWithScrollOffset` | scrollOffset=2 时，绝对行 2,3 正确高亮到 viewport[0,1] |
+| `SelectionDoesNotDriftOnScroll` | 选中行 0 后滚动到 scrollOffset=2，viewport 无选区残留 |
+| `PaneScrollOffsetReflectsState` | scrollPane 后 paneScrollOffset 返回正确值 |
+| `ScrollHorizontalIncreasesOffset` | scrollHorizontal 正确增加 hScrollOffset |
+| `ScrollHorizontalClampsAtZero` | scrollHorizontal 不会使 hScrollOffset 变为负值 |
+| `ScreenColToByteOffsetAbsoluteIndex` | 绝对行 0 处列转字节正常 |
+| `ScreenColToByteOffsetScrolledPane` | 绝对行 2 处列转字节正常 |
+| `ScreenColToByteOffsetOutOfBoundsReturnsZero` | 越界行返回 0，不崩溃 |
+
+**测试技巧**：fixture 有 5 行，默认 paneHeight=5 时 clampScroll 不改变 scrollOffset。
+需先调用 `ctrl_.getViewData(3, 3)` 将 paneHeight 设为 3，再 `scrollPane(+4)` 才能得到 scrollOffset=2。
+
+---
+
+## 12. 文件路径 Tab 补全（v0.9.9，Issue #10）
+
+### 12.1 功能描述
+
+按 `o` 进入 `InputMode::OpenFile` 后，按 `Tab` 键触发路径补全：
+- **0 个匹配**：无动作
+- **1 个匹配**：直接填入输入框；若选中的是目录，自动追加 `/` 并再次触发补全
+- **N>1 个匹配**：在输入行上方弹出最多 3 条候选列表，超出时显示 `▲` 上翻指示
+
+**弹窗键盘操作**：
+- `Tab` / `↓`：下移高亮（循环）
+- `↑`：上移高亮（循环）
+- `Enter`：确认当前项，填入输入框，关闭弹窗（不提交文件，可继续编辑）
+- `Esc`：关闭弹窗，保留当前输入
+- 任意字符输入：先关闭弹窗，再追加字符
+
+### 12.2 路径解析
+
+`splitPathForCompletion(input)` 将输入分成目录前缀和文件名前缀：
+```
+"C:/Users/foo/bar" → {"C:/Users/foo/", "bar"}
+"C:/Users/"        → {"C:/Users/",     ""}
+"log"              → {"",              "log"}
+```
+
+`getFileCompletions(dir, prefix)` 用 `std::filesystem::directory_iterator` 列举目录内容：
+- 目录项名称末尾自动追加 `/`
+- 结果按字母排序
+- 异常（无权限、路径不存在）静默忽略
+- 中文路径通过 `u8string()` 转换（C++20 返回 `std::u8string`，需 `string(u8.begin(), u8.end())` 转换）
+
+### 12.3 弹窗对齐
+
+`completionCol`（ViewData 字段）= `len(inputPrompt_) + displayColWidth(inputBuffer 的目录前缀部分)`
+
+渲染时：
+- 边框左侧 (`│>`) 在 `completionCol - 2` 列
+- 候选文件名文本在 `completionCol` 列开始，与输入框中正在补全的前缀字母对齐
+
+示例（输入 `Open: /logs/ap_`，`a` 在列 12）：
+```
+          ┌─────────────┐
+          │> api.log    │
+          │  app.log    │
+          │  apr.log  ▲ │
+          └─────────────┘
+Open: /logs/ap_
+```
+（`│>` 在列 10，`a` 在列 12）
+
+### 12.4 paneHeight 联动
+
+`recomputePaneHeights()` 中，当 `showCompletions_` 为 true 时，从可用高度中减去弹窗行数（最多 3 行内容 + 2 行边框 = 5 行），防止弹窗遮挡日志内容。
+
+### 12.5 测试覆盖
+
+新增 13 个测试（`tests/e2e/completion_test.cpp`）：
+
+| 测试 | 验证内容 |
+|------|---------|
+| `NoMatchDoesNothing` | 无匹配时不显示弹窗 |
+| `SingleMatchFillsBufferDirectly` | 单一匹配直接填入缓冲区，不弹窗 |
+| `MultipleMatchesShowPopup` | 多个匹配弹出补全窗口 |
+| `TabCyclesThroughCompletions` | Tab 依次循环候选项 |
+| `ArrowDownNavigatesPopup` | `↓` 下移高亮 |
+| `ArrowUpWrapsAround` | `↑` 从首项跳到末项 |
+| `EnterAcceptsSelectedCompletion` | Enter 确认并关闭弹窗 |
+| `EscapeClosesPopupPreservesBuffer` | Esc 关闭弹窗，输入缓冲不变 |
+| `CharacterInputClosesPopup` | 字符输入关闭弹窗并追加字符 |
+| `SelectingDirectoryTriggersNextLevel` | 选目录自动触发下一级补全 |
+| `ExitInputModeClearsCompletions` | 退出输入模式后补全状态清除 |
+| `EmptyPrefixListsAllFiles` | 无前缀 Tab 列举目录全部文件 |
+| `CompletionIndexWrapsCorrectly` | 补全索引正确循环 |

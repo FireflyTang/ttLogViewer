@@ -23,6 +23,7 @@ bool clipboardCopy(const std::string& text) {
     if (!hMem) { CloseClipboard(); return false; }
 
     auto* dst = static_cast<wchar_t*>(GlobalLock(hMem));
+    if (!dst) { GlobalFree(hMem); CloseClipboard(); return false; }
     MultiByteToWideChar(CP_UTF8, 0,
                         text.c_str(), static_cast<int>(text.size()),
                         dst, wlen);

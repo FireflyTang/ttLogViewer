@@ -21,9 +21,10 @@ static std::string sessionPath() {
     return base + "/ttlogviewer/last_session.json";
 #else
     const char* xdg = getenv("XDG_CONFIG_HOME");
+    const char* home = getenv("HOME");
     const std::string base = xdg
         ? std::string(xdg)
-        : (std::string(getenv("HOME")) + "/.config");
+        : (home ? std::string(home) + "/.config" : std::string("."));
     return base + "/ttlogviewer/last_session.json";
 #endif
 }

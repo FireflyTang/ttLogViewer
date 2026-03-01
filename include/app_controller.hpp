@@ -108,6 +108,12 @@ struct ViewData {
 
     // ── Text selection ───────────────────────────────────────────────────────
     bool        hasSelection      = false;  // true when character-level selection is active
+
+    // ── Tab completion popup (OpenFile mode) ─────────────────────────────────
+    bool                     showCompletions  = false;
+    std::vector<std::string> completions;      // filename-only candidates
+    size_t                   completionIndex  = 0;    // 0-based index of highlighted item
+    int                      completionCol    = 0;    // terminal column where filename text starts
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -178,8 +184,22 @@ public:
 
     // Convert a raw terminal screen-column (m.x from FTXUI Mouse event) within
     // the given pane/row to a byte offset within the line content.
+    // lineIndex is 0-based ABSOLUTE index in the pane (not viewport-relative).
     // Accounts for the line-number prefix and horizontal scroll internally.
     size_t screenColToByteOffset(FocusArea pane, size_t lineIndex, int screenCol) const;
+
+    // Return the current vertical scroll offset for the given pane.
+    size_t paneScrollOffset(FocusArea area) const;
+
+    // Return the last known terminal width.
+    int terminalWidth() const { return lastTerminalWidth_; }
+
+    // Return the column width of the rendered line prefix (line-number + cursor arrow).
+    // Used by render.cpp to determine horizontal auto-scroll thresholds.
+    int prefixColWidth() const;
+
+    // Scroll the given pane horizontally by deltaBytes (positive = right, negative = left).
+    void scrollHorizontal(FocusArea area, int deltaBytes);
 
 private:
     ILogReader&   reader_;
@@ -322,7 +342,14 @@ private:
     // ── Selection helpers ─────────────────────────────────────────────────────
     std::string buildSelectedText() const;
 
+    // ── Completion state (OpenFile mode) ─────────────────────────────────────
+    std::vector<std::string> completions_;
+    size_t                   completionIndex_ = 0;
+    bool                     showCompletions_ = false;
+
+    void triggerCompletion();
+    void acceptCompletion();
+
     // ── getViewData helpers ────────────────────────────────────────────────────
-    void buildRawPane(ViewData& data);
-    void buildFilteredPane(ViewData& data);
+    void buildPane(FocusArea area, ViewData& data);
 };

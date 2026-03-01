@@ -526,10 +526,98 @@ bool AppController::handleKeyGotoLine(const Event& event) {
     return handleCommonInputKeys(event, false);
 }
 
+// ── Tab completion helpers ─────────────────────────────────────────────────────
+
+namespace {
+
+// Split a path into (directory_prefix, filename_prefix).
+// The directory prefix is everything up to and including the last '/' or '\'.
+// If no separator, dir = "" (meaning current directory).
+// UTF-8 safe: '/' (0x2F) and '\' (0x5C) never appear as continuation bytes.
+static std::pair<std::string, std::string> splitPathForCompletion(const std::string& input) {
+    const auto pos = input.find_last_of("/\\");
+    if (pos == std::string::npos)
+        return {"", input};
+    return {input.substr(0, pos + 1), input.substr(pos + 1)};
+}
+
+// Return sorted list of filenames (not full paths) in the given directory
+// whose names start with filePrefix.  Directories have '/' appended.
+// Empty filePrefix = list all entries.  Errors are silently ignored.
+static std::vector<std::string> getFileCompletions(const std::string& dirStr,
+                                                    const std::string& filePrefix) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> results;
+
+    // Use current directory when no directory part was given.
+    fs::path dir = dirStr.empty() ? fs::current_path() : fs::path(dirStr);
+
+    std::error_code ec;
+    for (auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec) break;
+        // u8string() returns std::u8string in C++20; convert to std::string via range ctor.
+        // The byte content is identical (UTF-8), so this is a safe reinterpretation.
+        const auto u8name = entry.path().filename().u8string();
+        std::string name(u8name.begin(), u8name.end());
+        if (filePrefix.empty() || name.starts_with(filePrefix)) {
+            if (entry.is_directory(ec))
+                name += '/';
+            results.push_back(std::move(name));
+        }
+    }
+    std::sort(results.begin(), results.end());
+    return results;
+}
+
+}  // anonymous namespace
+
 // ── OpenFile mode ─────────────────────────────────────────────────────────────
 
 bool AppController::handleKeyOpenFile(const Event& event) {
-    // Special handling for Return key
+    // ── Tab: trigger or cycle completions ─────────────────────────────────────
+    if (event == Event::Tab) {
+        if (showCompletions_ && !completions_.empty()) {
+            completionIndex_ = (completionIndex_ + 1) % completions_.size();
+        } else {
+            triggerCompletion();
+        }
+        return true;
+    }
+
+    // ── Completion popup navigation ────────────────────────────────────────────
+    if (showCompletions_ && !completions_.empty()) {
+        if (event == Event::ArrowDown) {
+            completionIndex_ = (completionIndex_ + 1) % completions_.size();
+            return true;
+        }
+        if (event == Event::ArrowUp) {
+            completionIndex_ = (completionIndex_ == 0)
+                               ? completions_.size() - 1
+                               : completionIndex_ - 1;
+            return true;
+        }
+        if (event == Event::Return) {
+            acceptCompletion();
+            return true;
+        }
+        if (event == Event::Escape) {
+            showCompletions_ = false;
+            completions_.clear();
+            completionIndex_ = 0;
+            recomputePaneHeights();
+            return true;
+        }
+        // Any character typed closes the popup and falls through to normal input.
+        if (event.is_character()) {
+            showCompletions_ = false;
+            completions_.clear();
+            completionIndex_ = 0;
+            recomputePaneHeights();
+            // Fall through to handleCommonInputKeys below.
+        }
+    }
+
+    // ── Return: open the file ─────────────────────────────────────────────────
     if (event == Event::Return) {
         std::string path = inputBuffer_;
         exitInputMode();
@@ -550,6 +638,47 @@ bool AppController::handleKeyOpenFile(const Event& event) {
 
     // Handle common input keys (Escape, Backspace, characters)
     return handleCommonInputKeys(event, true);
+}
+
+// ── triggerCompletion ─────────────────────────────────────────────────────────
+
+void AppController::triggerCompletion() {
+    auto [dir, filePrefix] = splitPathForCompletion(inputBuffer_);
+    completions_ = getFileCompletions(dir, filePrefix);
+    completionIndex_ = 0;
+
+    if (completions_.empty()) {
+        showCompletions_ = false;
+    } else if (completions_.size() == 1) {
+        // Single match: fill in directly and hide popup.
+        const std::string candidate = completions_[0];
+        inputBuffer_ = dir + candidate;
+        completions_.clear();
+        showCompletions_ = false;
+        recomputePaneHeights();
+        // If it ended in '/', recurse to show the next level.
+        if (candidate.back() == '/')
+            triggerCompletion();
+    } else {
+        showCompletions_ = true;
+        recomputePaneHeights();
+    }
+}
+
+// ── acceptCompletion ──────────────────────────────────────────────────────────
+
+void AppController::acceptCompletion() {
+    if (completions_.empty()) return;
+    const std::string candidate = completions_[completionIndex_];
+    auto [dir, _unused] = splitPathForCompletion(inputBuffer_);
+    inputBuffer_ = dir + candidate;
+    showCompletions_ = false;
+    completions_.clear();
+    completionIndex_ = 0;
+    recomputePaneHeights();
+    // If user selected a directory, immediately show the next level.
+    if (candidate.back() == '/')
+        triggerCompletion();
 }
 
 // ── ExportConfirm mode ────────────────────────────────────────────────────────
@@ -692,13 +821,17 @@ static std::vector<SearchSpan> computeSearchSpans(
     return result;
 }
 
-void AppController::buildRawPane(ViewData& data) {
-    const size_t total = reader_.lineCount();
-    const size_t ph    = static_cast<size_t>(lastRawPaneHeight_);
+void AppController::buildPane(FocusArea area, ViewData& data) {
+    const bool isRaw     = (area == FocusArea::Raw);
+    PaneState& ps        = isRaw ? rawState_      : filteredState_;
+    const int  paneH     = isRaw ? lastRawPaneHeight_ : lastFilteredPaneHeight_;
+    const size_t total   = isRaw ? reader_.lineCount() : chain_.filteredLineCount();
+    const size_t ph      = static_cast<size_t>(paneH);
+    auto& output         = isRaw ? data.rawPane    : data.filteredPane;
 
-    clampScroll(rawState_, total, lastRawPaneHeight_);
+    clampScroll(ps, total, paneH);
 
-    const size_t first = rawState_.scrollOffset;
+    const size_t first = ps.scrollOffset;
     const size_t count = (total > first) ? std::min(ph, total - first) : 0;
 
     // Only highlight the keyword on the current search result line (not every match).
@@ -706,87 +839,39 @@ void AppController::buildRawPane(ViewData& data) {
         (!searchKeyword_.empty() && !searchResults_.empty())
         ? searchResults_[searchIndex_] : 0;
 
-    // Build selection span for a given line index within the visible slice.
-    auto selSpans = [&](size_t sliceIdx, size_t contentSize) -> std::vector<SelectionSpan> {
-        if (!selection_.active || selection_.anchor.pane != FocusArea::Raw) return {};
+    // Build selection span using ABSOLUTE pane index.
+    auto selSpans = [&](size_t absIdx, size_t contentSize) -> std::vector<SelectionSpan> {
+        if (!selection_.active || selection_.anchor.pane != area) return {};
         auto [startPt, endPt] = selection_.ordered();
-        if (sliceIdx < startPt.lineIndex || sliceIdx > endPt.lineIndex) return {};
-        const size_t bStart = (sliceIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
-        const size_t bEnd   = (sliceIdx == endPt.lineIndex)   ? endPt.byteOffset   : contentSize;
+        if (absIdx < startPt.lineIndex || absIdx > endPt.lineIndex) return {};
+        const size_t bStart = (absIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
+        const size_t bEnd   = (absIdx == endPt.lineIndex)   ? endPt.byteOffset   : contentSize;
         if (bStart >= bEnd) return {};
         return {{ bStart, bEnd }};
     };
 
-    data.rawPane.reserve(count);
+    output.reserve(count);
     size_t maxContentLen = 0;
     for (size_t i = 0; i < count; ++i) {
-        const size_t lineNo = first + i + 1;
-        LogLine ll;
-        ll.rawLineNo      = lineNo;
-        ll.content        = reader_.getLine(lineNo);
-        ll.colors         = {};   // raw pane does not show filter match colors
-        ll.searchSpans    = (lineNo == currentResultRawLine)
-            ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
-            : std::vector<SearchSpan>{};
-        ll.selectionSpans = selSpans(i, ll.content.size());
-        ll.highlighted    = (first + i == rawState_.cursor);
-        ll.folded         = (foldedLines_.count(lineNo) > 0);
-        maxContentLen     = std::max(maxContentLen, ll.content.size());
-        data.rawPane.push_back(std::move(ll));
-    }
-
-    // Clamp horizontal scroll: keep at least one byte of the longest visible line visible.
-    // Skip when there are no visible lines (maxContentLen == 0) to avoid losing the offset.
-    if (maxContentLen > 0 && rawState_.hScrollOffset >= maxContentLen)
-        rawState_.hScrollOffset = maxContentLen - 1;
-}
-
-void AppController::buildFilteredPane(ViewData& data) {
-    const size_t total = chain_.filteredLineCount();
-    const size_t ph    = static_cast<size_t>(lastFilteredPaneHeight_);
-
-    clampScroll(filteredState_, total, lastFilteredPaneHeight_);
-
-    const size_t first = filteredState_.scrollOffset;
-    const size_t count = (total > first) ? std::min(ph, total - first) : 0;
-
-    // Only highlight the keyword on the current search result line (not every match).
-    const size_t currentResultRawLine =
-        (!searchKeyword_.empty() && !searchResults_.empty())
-        ? searchResults_[searchIndex_] : 0;
-
-    auto selSpansFilt = [&](size_t sliceIdx, size_t contentSize) -> std::vector<SelectionSpan> {
-        if (!selection_.active || selection_.anchor.pane != FocusArea::Filtered) return {};
-        auto [startPt, endPt] = selection_.ordered();
-        if (sliceIdx < startPt.lineIndex || sliceIdx > endPt.lineIndex) return {};
-        const size_t bStart = (sliceIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
-        const size_t bEnd   = (sliceIdx == endPt.lineIndex)   ? endPt.byteOffset   : contentSize;
-        if (bStart >= bEnd) return {};
-        return {{ bStart, bEnd }};
-    };
-
-    data.filteredPane.reserve(count);
-    size_t maxContentLenFilt = 0;
-    for (size_t i = 0; i < count; ++i) {
-        const size_t rawLineNo = chain_.filteredLineAt(first + i);
+        const size_t rawLineNo = isRaw ? (first + i + 1) : chain_.filteredLineAt(first + i);
         LogLine ll;
         ll.rawLineNo      = rawLineNo;
         ll.content        = reader_.getLine(rawLineNo);
-        ll.colors         = chain_.computeColors(rawLineNo, ll.content);
+        ll.colors         = isRaw ? std::vector<ColorSpan>{}
+                                  : chain_.computeColors(rawLineNo, ll.content);
         ll.searchSpans    = (rawLineNo == currentResultRawLine)
             ? computeSearchSpans(ll.content, searchKeyword_, searchUseRegex_, searchRegex_)
             : std::vector<SearchSpan>{};
-        ll.selectionSpans = selSpansFilt(i, ll.content.size());
-        ll.highlighted    = (first + i == filteredState_.cursor);
+        ll.selectionSpans = selSpans(first + i, ll.content.size());
+        ll.highlighted    = (first + i == ps.cursor);
         ll.folded         = (foldedLines_.count(rawLineNo) > 0);
-        maxContentLenFilt = std::max(maxContentLenFilt, ll.content.size());
-        data.filteredPane.push_back(std::move(ll));
+        maxContentLen     = std::max(maxContentLen, ll.content.size());
+        output.push_back(std::move(ll));
     }
 
     // Clamp horizontal scroll: keep at least one byte of the longest visible line visible.
-    // Skip when there are no visible lines (maxContentLenFilt == 0) to avoid losing the offset.
-    if (maxContentLenFilt > 0 && filteredState_.hScrollOffset >= maxContentLenFilt)
-        filteredState_.hScrollOffset = maxContentLenFilt - 1;
+    if (maxContentLen > 0 && ps.hScrollOffset >= maxContentLen)
+        ps.hScrollOffset = maxContentLen - 1;
 }
 
 // ── getViewData ────────────────────────────────────────────────────────────────
@@ -831,8 +916,21 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.searchUseRegex    = searchUseRegex_;
     data.hasSelection      = selection_.active;
 
-    buildRawPane(data);
-    buildFilteredPane(data);
+    // ── Completion popup ──────────────────────────────────────────────────────
+    data.showCompletions = showCompletions_;
+    data.completions     = completions_;
+    data.completionIndex = completionIndex_;
+    if (showCompletions_ && !completions_.empty()) {
+        // completionCol = display column where the filename part starts in the input line.
+        // = len(inputPrompt_) + display width of directory prefix.
+        auto [dir, _unused] = splitPathForCompletion(inputBuffer_);
+        const size_t dirBytes = dir.empty() ? 0 : dir.size();
+        const int dirDisplayCols = static_cast<int>(byteOffsetToDisplayCol(inputBuffer_, 0, dirBytes));
+        data.completionCol = static_cast<int>(inputPrompt_.size()) + dirDisplayCols;
+    }
+
+    buildPane(FocusArea::Raw, data);
+    buildPane(FocusArea::Filtered, data);
 
     // ── Filter tags ───────────────────────────────────────────────────────────
     data.filterTags.reserve(chain_.filterCount());
@@ -866,8 +964,21 @@ void AppController::onTerminalResize(int width, int height) {
 void AppController::recomputePaneHeights() {
     if (lastTerminalHeight_ <= 0) return;   // not yet set (test environment)
     const int extra = (inputMode_ != InputMode::None || !searchKeyword_.empty()) ? 1 : 0;
+    // Completion popup rows: borders (2) + min(3, count) content rows + optional ▲ row.
+    int completionRows = 0;
+    if (showCompletions_ && !completions_.empty()) {
+        const int showCount = static_cast<int>(std::min(completions_.size(), size_t(3)));
+        // Compute startIdx to know whether the ▲ indicator is shown.
+        size_t startIdx = 0;
+        if (completionIndex_ >= static_cast<size_t>(showCount))
+            startIdx = completionIndex_ - static_cast<size_t>(showCount) + 1;
+        if (startIdx + static_cast<size_t>(showCount) > completions_.size())
+            startIdx = completions_.size() - static_cast<size_t>(showCount);
+        const bool hasArrow = (startIdx > 0);
+        completionRows = showCount + 2 + (hasArrow ? 1 : 0);
+    }
     const int avail = std::max(2, lastTerminalHeight_
-                                    - AppConfig::global().uiOverheadRows - extra);
+                                    - AppConfig::global().uiOverheadRows - extra - completionRows);
     const int rawH  = static_cast<int>(avail * AppConfig::global().rawPaneFraction);
     lastRawPaneHeight_      = std::max(1, rawH);
     lastFilteredPaneHeight_ = std::max(1, avail - rawH);
@@ -901,6 +1012,10 @@ void AppController::exitInputMode() {
     inputPrompt_.clear();
     inputValid_         = false;
     filterInputExclude_ = false;
+    // Clear any active completion popup.
+    showCompletions_ = false;
+    completions_.clear();
+    completionIndex_ = 0;
     recomputePaneHeights();
 }
 
@@ -1321,17 +1436,16 @@ size_t AppController::screenColToByteOffset(FocusArea pane, size_t lineIndex, in
     if (contentCol < 0) return 0;  // click landed on the prefix — treat as start of line
 
     // Determine the line content and horizontal scroll for the targeted pane.
+    // lineIndex is an ABSOLUTE pane index (0-based), not viewport-relative.
     std::string_view content;
     size_t hScroll = 0;
     if (pane == FocusArea::Raw) {
-        const size_t absIdx = rawState_.scrollOffset + lineIndex;
-        if (absIdx >= reader_.lineCount()) return 0;
-        content = reader_.getLine(absIdx + 1);
+        if (lineIndex >= reader_.lineCount()) return 0;
+        content = reader_.getLine(lineIndex + 1);  // reader uses 1-based line numbers
         hScroll = rawState_.hScrollOffset;
     } else {
-        const size_t absIdx = filteredState_.scrollOffset + lineIndex;
-        if (absIdx >= chain_.filteredLineCount()) return 0;
-        const size_t rawLineNo = chain_.filteredLineAt(absIdx);
+        if (lineIndex >= chain_.filteredLineCount()) return 0;
+        const size_t rawLineNo = chain_.filteredLineAt(lineIndex);
         content = reader_.getLine(rawLineNo);
         hScroll = filteredState_.hScrollOffset;
     }
@@ -1352,16 +1466,9 @@ std::string AppController::buildSelectedText() const {
     auto [startPt, endPt] = selection_.ordered();
     const FocusArea pane = selection_.anchor.pane;
 
-    // Collect the source lines in the selected range.
-    const size_t scrollOff = (pane == FocusArea::Raw)
-                             ? rawState_.scrollOffset
-                             : filteredState_.scrollOffset;
-
+    // lineIndex values are now ABSOLUTE pane indices — iterate directly.
     std::string result;
-    for (size_t li = startPt.lineIndex; li <= endPt.lineIndex; ++li) {
-        // Compute the absolute pane index.
-        const size_t absIdx = scrollOff + li;
-
+    for (size_t absIdx = startPt.lineIndex; absIdx <= endPt.lineIndex; ++absIdx) {
         std::string_view content;
         if (pane == FocusArea::Raw) {
             if (absIdx >= reader_.lineCount()) break;
@@ -1372,8 +1479,8 @@ std::string AppController::buildSelectedText() const {
         }
 
         // Determine the byte range within this line.
-        const size_t byteStart = (li == startPt.lineIndex) ? startPt.byteOffset : 0;
-        const size_t byteEnd   = (li == endPt.lineIndex)   ? endPt.byteOffset   : content.size();
+        const size_t byteStart = (absIdx == startPt.lineIndex) ? startPt.byteOffset : 0;
+        const size_t byteEnd   = (absIdx == endPt.lineIndex)   ? endPt.byteOffset   : content.size();
 
         const size_t safeStart = std::min(byteStart, content.size());
         const size_t safeEnd   = std::min(byteEnd,   content.size());
@@ -1383,4 +1490,32 @@ std::string AppController::buildSelectedText() const {
             result += std::string(content.substr(safeStart, safeEnd - safeStart));
     }
     return result;
+}
+
+// ── #22 Auto-scroll accessors ──────────────────────────────────────────────────
+
+size_t AppController::paneScrollOffset(FocusArea area) const {
+    return (area == FocusArea::Raw) ? rawState_.scrollOffset : filteredState_.scrollOffset;
+}
+
+int AppController::prefixColWidth() const {
+    // Matches the prefix computation in renderLogPane() and screenColToByteOffset().
+    int w = 2;  // "▶ " or "  " (cursor arrow + space)
+    if (showLineNumbers_) {
+        const int minW       = AppConfig::global().minLineNoWidth;
+        const int digitCount = static_cast<int>(std::to_string(reader_.lineCount()).size());
+        w += std::max(digitCount, minW) + 1;  // digits + trailing space
+    }
+    return w;
+}
+
+void AppController::scrollHorizontal(FocusArea area, int deltaBytes) {
+    PaneState& ps = (area == FocusArea::Raw) ? rawState_ : filteredState_;
+    if (deltaBytes < 0) {
+        const size_t step = static_cast<size_t>(-deltaBytes);
+        ps.hScrollOffset = (ps.hScrollOffset >= step) ? ps.hScrollOffset - step : 0;
+    } else {
+        ps.hScrollOffset += static_cast<size_t>(deltaBytes);
+    }
+    followTail_ = false;
 }
