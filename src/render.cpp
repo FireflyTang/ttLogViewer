@@ -77,8 +77,7 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
                               bool showLineNumbers,
                               int terminalWidth,
                               size_t hScroll,
-                              size_t totalLines,
-                              bool searchActive) {
+                              size_t totalLines) {
     if (lines.empty())
         return text("") | flex;
 
@@ -108,9 +107,7 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
         if (showLineNumbers)
             parts.push_back(
                 text(std::format("{:>{}} ", ll.rawLineNo, maxLineNoW)) | dim);
-        // During an active search, suppress the ▶ cursor marker so it does not
-        // jump around as the search scrolls through results.
-        parts.push_back(text((ll.highlighted && !searchActive) ? "▶ " : "  "));
+        parts.push_back(text(ll.highlighted ? "▶ " : "  "));
         parts.push_back(
             renderColoredLine(ll.content, ll.colors, ll.searchSpans,
                               ll.folded, contentWidth, hScroll,
@@ -118,8 +115,7 @@ static Element renderLogPane(const std::vector<LogLine>& lines,
 
         Element row = hbox(std::move(parts));
 
-        // Also suppress the whole-line inverted background during active search.
-        if (ll.highlighted && focused && !searchActive)
+        if (ll.highlighted && focused)
             row = row | inverted;
 
         rows.push_back(row);
@@ -146,11 +142,6 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element dot = tag.enabled
             ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
             : Element(text("○ ") | color(parseHexColor(tag.color)));
-        // Double-inversion trick: pre-invert the dot so that when the whole row is
-        // inverted for selection, the two inversions cancel for the dot — it keeps
-        // its original fg color while sharing the same highlighted background as
-        // the label text.
-        if (tag.selected) dot = dot | inverted;
         Element row = hbox({ text(std::move(label)), std::move(dot) });
         if (tag.selected) row = row | inverted;
         if (!tag.enabled) row = row | dim;
@@ -262,9 +253,10 @@ static Elements renderCompletionPopup(const ViewData& data) {
     maxLen = std::max(maxLen, size_t(1));  // minimum 1
 
     // '─' (U+2500) is 3 bytes in UTF-8; build the border line by string concatenation.
+    // Content between │ borders = textPad (2 cols) + entry (maxLen+1 cols) = maxLen+3 cols.
     std::string hLine;
-    hLine.reserve((maxLen + 2) * 3);
-    for (size_t i = 0; i < maxLen + 2; ++i) hLine += "─";
+    hLine.reserve((maxLen + 3) * 3);
+    for (size_t i = 0; i < maxLen + 3; ++i) hLine += "─";
 
     Elements rows;
 
@@ -473,12 +465,12 @@ Component CreateMainComponent(AppController& controller,
             separator(),
             renderLogPane(data.rawPane, data.rawFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.rawHScroll, data.totalLines, data.searchActive)
+                           data.rawHScroll, data.totalLines)
                 | size(HEIGHT, EQUAL, rawH),
             separator(),
             renderLogPane(data.filteredPane, data.filteredFocused,
                            data.showLineNumbers, data.terminalWidth,
-                           data.filtHScroll, data.totalLines, data.searchActive)
+                           data.filtHScroll, data.totalLines)
                 | size(HEIGHT, EQUAL, filtH),
             separator(),
             renderFilterBar(data.filterTags),
@@ -509,12 +501,14 @@ Component CreateMainComponent(AppController& controller,
             return true;
         }
 
-        // Ctrl+C: copy selection to clipboard (only in normal mode, no dialog)
+        // Ctrl+C: copy selection to clipboard (only in normal mode, no dialog).
+        // Always consume CtrlC here so it does not fall through to the terminal's
+        // CTRL_C_EVENT handler (which would terminate the process on Windows).
         if (event == Event::CtrlC
                 && !controller.isInputActive()
-                && !controller.isDialogOpen()
-                && controller.hasSelection()) {
-            controller.copySelectionToClipboard();
+                && !controller.isDialogOpen()) {
+            if (controller.hasSelection())
+                controller.copySelectionToClipboard();
             return true;
         }
 
