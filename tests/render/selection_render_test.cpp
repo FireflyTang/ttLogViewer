@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <ftxui/component/event.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/screen/color.hpp>
 
@@ -141,4 +142,57 @@ TEST_F(SelectionRenderTest, ClearSelectionRemovesBlueBackground) {
     }
     EXPECT_FALSE(foundBlue)
         << "After clearing selection, Blue background should disappear";
+}
+
+// ── #30: Drag past right edge triggers horizontal auto-scroll ────────────────
+// When the user holds Left button and drags the mouse past the right edge of
+// the terminal (x >= terminalWidth()), render.cpp must call scrollHorizontal()
+// to advance the horizontal scroll offset of the focused pane.
+//
+// Layout reminder (from render.cpp):
+//   kStatusBarRows = 2  →  rawTop = 2
+//   with h=20, uiOverheadRows=6, rawPaneFraction=0.6:
+//     avail = 14, rawH = 8  →  rawBot = 9
+//   y=5 is safely inside the raw pane [2, 9].
+
+TEST_F(SelectionRenderTest, DragPastRightEdgeScrollsHorizontally) {
+    const int w = 80, h = 20;
+
+    auto comp = CreateMainComponent(ctrl_, screen_);
+    ctrl_.onTerminalResize(w, h);
+
+    // Render once so the component establishes internal layout state.
+    {
+        auto scr = ftxui::Screen::Create(ftxui::Dimension::Fixed(w),
+                                          ftxui::Dimension::Fixed(h));
+        ftxui::Render(scr, comp->Render());
+    }
+
+    ASSERT_EQ(ctrl_.getViewData(8, 6).rawHScroll, 0u);
+
+    // Helper to construct a mouse event.
+    auto mouseEvent = [](int x, int y, ftxui::Mouse::Button btn,
+                         ftxui::Mouse::Motion mot) {
+        ftxui::Mouse m;
+        m.button  = btn;
+        m.motion  = mot;
+        m.x       = x;
+        m.y       = y;
+        m.shift   = m.meta = m.control = false;
+        return ftxui::Event::Mouse("", m);
+    };
+
+    // Press inside the raw pane (y=5, which is in [rawTop=2, rawBot=9]).
+    // This calls controller.startSelection() → sets selection_.dragging = true.
+    comp->OnEvent(mouseEvent(10, 5, ftxui::Mouse::Left, ftxui::Mouse::Pressed));
+
+    ASSERT_TRUE(ctrl_.isSelectionDragging())
+        << "Mouse press in raw pane should start selection drag";
+
+    // Drag past the right edge (x=85 > termW=80).
+    // handleMouseEvent checks: m.x >= controller.terminalWidth() → scrollHorizontal(+step).
+    comp->OnEvent(mouseEvent(85, 5, ftxui::Mouse::Left, ftxui::Mouse::Moved));
+
+    EXPECT_GT(ctrl_.getViewData(8, 6).rawHScroll, 0u)
+        << "Dragging past the right edge (x=85 > termW=80) should increase rawHScroll";
 }

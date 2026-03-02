@@ -165,6 +165,88 @@ TEST_F(CompletionPopupRenderTest, PopupShowsFileNames) {
     EXPECT_TRUE(found) << "Popup should show file names from candidates";
 }
 
+// ── Overlay: popup must not shift log pane content ───────────────────────────
+// The completion popup is rendered as a dbox overlay. Opening it should NOT
+// change the row at which log content appears (as a push-down layout would).
+
+TEST_F(CompletionPopupRenderTest, PopupIsOverlayNotPush) {
+    const std::string prefix = (tmpDir_ / "").string();
+
+    // Enter OpenFile mode and type prefix WITHOUT triggering popup yet.
+    // (openFileMode types the prefix but does not press Tab)
+    openFileMode(prefix);
+    ASSERT_FALSE(ctrl_.getViewData(10, 10).showCompletions);
+
+    auto scr_before = renderScreen(100, 20);
+
+    // Find the row where "line1" appears (first log line from RenderTestBase).
+    auto findRow = [](const ftxui::Screen& scr, const std::string& text) {
+        for (int y = 0; y < scr.dimy(); ++y) {
+            std::string row;
+            for (int x = 0; x < scr.dimx(); ++x)
+                row += scr.PixelAt(x, y).character;
+            if (row.find(text) != std::string::npos)
+                return y;
+        }
+        return -1;
+    };
+
+    int row_before = findRow(scr_before, "line1");
+    ASSERT_GE(row_before, 0) << "line1 must be visible in input mode before popup";
+
+    // Now trigger popup (Tab).
+    ctrl_.handleKey(ftxui::Event::Tab);
+    ASSERT_TRUE(ctrl_.getViewData(10, 10).showCompletions);
+
+    auto scr_after = renderScreen(100, 20);
+    int row_after = findRow(scr_after, "line1");
+    ASSERT_GE(row_after, 0) << "line1 must still be visible with popup active";
+
+    // Overlay: the log content row must not have shifted.
+    EXPECT_EQ(row_after, row_before)
+        << "Completion popup (overlay/dbox) must not shift log pane content: "
+        << "line1 was on row " << row_before << " but moved to row " << row_after;
+}
+
+// ── Navigation: ArrowDown moves the highlight row downward ──────────────────
+// When the user presses ArrowDown in the popup, the inverted ">" marker must
+// appear one row lower than it was before (next completion item selected).
+
+TEST_F(CompletionPopupRenderTest, NavigationMovesHighlightDownward) {
+    const std::string prefix = (tmpDir_ / "").string();
+    openFileMode(prefix);
+    ctrl_.handleKey(ftxui::Event::Tab);
+
+    auto d = ctrl_.getViewData(10, 10);
+    ASSERT_TRUE(d.showCompletions);
+    ASSERT_GE(d.completions.size(), 2u) << "Need at least 2 completions for navigation test";
+
+    // Helper: find the y-row of the inverted ">" marker (selected item in popup).
+    auto findInvertedRow = [](const ftxui::Screen& scr) {
+        for (int y = 0; y < scr.dimy(); ++y)
+            for (int x = 0; x < scr.dimx(); ++x)
+                if (scr.PixelAt(x, y).character == ">" && scr.PixelAt(x, y).inverted)
+                    return y;
+        return -1;
+    };
+
+    auto scr_before = renderScreen(100, 20);
+    int row_before = findInvertedRow(scr_before);
+    ASSERT_GE(row_before, 0) << "Initial selected item must have inverted '>' marker";
+
+    // Navigate down: second item becomes selected.
+    ctrl_.handleKey(ftxui::Event::ArrowDown);
+
+    auto scr_after = renderScreen(100, 20);
+    int row_after = findInvertedRow(scr_after);
+    ASSERT_GE(row_after, 0) << "After ArrowDown, an inverted '>' must still exist";
+
+    // The highlight row must have moved DOWN (to the next item).
+    EXPECT_GT(row_after, row_before)
+        << "ArrowDown must move the highlighted item to a lower row: "
+        << "was row " << row_before << ", now row " << row_after;
+}
+
 // ── Scroll indicator ▲ appears when scrolled ─────────────────────────────────
 
 TEST_F(CompletionPopupRenderTest, ScrollIndicatorAppearsWhenNeeded) {
