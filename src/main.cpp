@@ -1,3 +1,4 @@
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <filesystem>
@@ -5,6 +6,7 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <thread>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -86,10 +88,16 @@ static std::string sessionPath() {
 
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
-    // Layer 1: Process-level Ctrl+C ignore (prevents default ExitProcess).
-    SetConsoleCtrlHandler(NULL, TRUE);
-    // Layer 2: Custom handler as fallback (returns TRUE for CTRL_C_EVENT).
+    // Layer 1: Custom console control handler (returns TRUE for CTRL_C_EVENT).
     SetConsoleCtrlHandler(ctrlHandler, TRUE);
+    // Layer 2: Disable ENABLE_PROCESSED_INPUT so Ctrl+C becomes keyboard input
+    // (byte 0x03 → Event::CtrlC via TerminalInputParser) instead of generating
+    // CTRL_C_EVENT → SIGINT → RecordSignal → Exit().
+    // NOTE: screen.Post() before screen.Loop() is silently dropped because
+    // task_sender_ is null until Install() runs.  We must call this directly
+    // here; FTXUI's Install() reads console mode and never sets bit 0x0001
+    // (ENABLE_PROCESSED_INPUT), so our setting survives Install().
+    disableProcessedInput();
 #endif
 
     // Load user config overrides before anything else.
@@ -136,25 +144,16 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // ── Ctrl+C defense: runs AFTER FTXUI Install() inside Loop() ──────────
-    // FTXUI's Install() registers std::signal(SIGINT, RecordSignal) and sets
-    // console mode.  We must override BOTH after Install() runs.
-    //
-    // Root cause: FTXUI on _WIN32 keeps ENABLE_PROCESSED_INPUT enabled, so
-    // Ctrl+C generates CTRL_C_EVENT → CRT raises SIGINT → RecordSignal →
-    // g_signal_exit_count++ → ExecuteSignalHandlers → Exit().  This path
-    // bypasses ForceHandleCtrlC and CatchEvent entirely.
-    //
-    // Fix: disable ENABLE_PROCESSED_INPUT so Ctrl+C becomes keyboard input
-    // (byte 0x03).  FTXUI's VT parser converts it to Event::CtrlC, which
-    // our CatchEvent handles for copy-to-clipboard.
-    screen.Post([]() {
-#ifdef _WIN32
-        disableProcessedInput();
-#endif
+    // SIG_IGN: belt-and-suspenders for POSIX SIGINT from other sources.
+    // FTXUI installs RecordSignal(SIGINT) in Install(), so we need to override
+    // it after Loop starts.  We use a detached thread with a short delay to
+    // run after Install() completes (screen.Post() before Loop is a no-op
+    // because task_sender_ is null until Install() runs).
+    std::thread([]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
         std::signal(SIGINT, SIG_IGN);
-        debugLog("[INIT] SIGINT handler overridden to SIG_IGN");
-    });
+        debugLog("[INIT] SIGINT handler overridden to SIG_IGN (thread)");
+    }).detach();
 
     auto component = CreateMainComponent(controller, screen);
     debugLog("[INIT] Entering screen.Loop()");

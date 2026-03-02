@@ -1,7 +1,7 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.12
-> 测试：444 个，全部通过
+> 版本：v0.9.13
+> 测试：452 个，全部通过
 > 最后更新：2026-03-02
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
@@ -759,3 +759,131 @@ Open: /logs/ap_
 | `ExitInputModeClearsCompletions` | 退出输入模式后补全状态清除 |
 | `EmptyPrefixListsAllFiles` | 无前缀 Tab 列举目录全部文件 |
 | `CompletionIndexWrapsCorrectly` | 补全索引正确循环 |
+
+---
+
+## 13. Windows Ctrl+C 处理（v0.9.10–v0.9.13 教训总结）
+
+### 13.1 问题描述
+
+在 MSYS2 MinGW + mintty 环境下，用户按 Ctrl+C 时程序直接退出，而期望行为是：有文本选区时复制到剪贴板，无选区时不做任何操作（绝不退出）。
+
+### 13.2 失败修复史（每次修复失败的根因）
+
+**第一次（v0.9.10）**：添加 `SetConsoleCtrlHandler(ctrlHandler, TRUE)` + `ForceHandleCtrlC(false)`
+
+- 失败原因：`SetConsoleCtrlHandler` 拦截了 Win32 Console 的 `CTRL_C_EVENT` 处理链，但 MSYS2 MinGW CRT 在更早阶段已经通过独立机制 `raise(SIGINT)` — SIGINT 根本没经过我们的 handler。`ForceHandleCtrlC(false)` 只影响键盘事件（`Event::CtrlC`）路径，对信号路径毫无作用。
+
+**第二次（v0.9.11）**：在 `screen.Post()` 里追加 `std::signal(SIGINT, SIG_IGN)`
+
+- 失败原因：**`screen.Post()` 在 `screen.Loop()` 之前调用是静默 no-op。** FTXUI 源码（`screen_interactive.cpp`）：
+  ```cpp
+  void ScreenInteractive::Post(Task task) {
+      if (!task_sender_) {   // ← task_sender_ 在 Install() 前为 null
+          return;            // ← 静默丢弃！
+      }
+      task_sender_->Send(std::move(task));
+  }
+  ```
+  `task_sender_` 在 `Install()` 内部才初始化，而 `Install()` 在 `Loop()` 开始时调用。因此在 `Loop()` 前的所有 `Post()` 调用全部被无声丢弃，`SIG_IGN` 从未生效。
+
+**第三次（v0.9.12）**：添加 `SetConsoleCtrlHandler(NULL, TRUE)` + 通过 `screen.Post()` 调用 `disableProcessedInput()`
+
+- 部分成功：`SetConsoleCtrlHandler(NULL, TRUE)` 确实阻止了退出（进程级忽略 Ctrl+C）。
+- 但 `disableProcessedInput()` 依然通过 `screen.Post()` 调用，仍然被丢弃。
+- 根本问题：`NULL + TRUE` 太激进——它完全吞掉了 Ctrl+C，没有任何键盘事件（`Event::CtrlC`）产生，CatchEvent 无法触发复制。
+
+### 13.3 根本修复（v0.9.13）
+
+**核心：在 `screen.Loop()` 之前直接调用 `disableProcessedInput()`，不通过 `screen.Post()`。**
+
+```cpp
+// main() 中，screen.Loop() 之前：
+SetConsoleCtrlHandler(ctrlHandler, TRUE);   // 备用拦截层
+disableProcessedInput();                    // 在 Install() 之前禁用 ENABLE_PROCESSED_INPUT
+// ...
+screen.Loop(component);
+```
+
+**完整信号/事件链**（修复后）：
+
+```
+Ctrl+C 按下
+  ↓
+Console 检查 ENABLE_PROCESSED_INPUT（已被我们清除为 0）
+  ↓
+不生成 CTRL_C_EVENT，不 raise(SIGINT)
+  ↓
+生成普通 KEY_EVENT，UnicodeChar = 0x03
+  ↓
+FTXUI EventListener 线程（ReadConsoleInput）
+  ↓
+TerminalInputParser.Add('\x03') → Event::CtrlC
+  ↓
+RunOnceBlocking → HandleTask → OnEvent(Event::CtrlC)
+  ↓
+CatchEvent 返回 true → 复制到剪贴板（或无操作）
+  ↓
+ForceHandleCtrlC(false) + handled=true → RecordSignal 不被调用 → 不退出
+```
+
+**为何 FTXUI Install() 不会覆盖我们的设置**：FTXUI 的 `Install()` 对 console 输入模式只修改 `echo_input`/`line_input`/`virtual_terminal_input`/`window_input` 几个 bit，**从不设置 bit 0x0001（ENABLE_PROCESSED_INPUT）**，因此我们在 `Install()` 之前清除的 bit 在 Install 后仍保持清除状态。
+
+### 13.4 关键教训
+
+| 教训 | 具体内容 |
+|------|---------|
+| **`screen.Post()` 在 `Loop()` 前是 no-op** | `task_sender_` 在 `Install()` 前为 null，所有 Post 静默丢弃。初始化代码必须直接调用，不能 Post |
+| **信号路径与键盘事件路径完全独立** | `ForceHandleCtrlC`/`CatchEvent` 只处理 `Event::CtrlC`（键盘事件）；SIGINT 走独立的 `RecordSignal → g_signal_exit_count → Exit()` 路径，两者互不干扰 |
+| **`SetConsoleCtrlHandler(NULL, TRUE)` 太激进** | 进程级忽略 Ctrl+C，连键盘事件也不产生，不能用于"拦截并自定义 Ctrl+C 行为"的场景 |
+| **ENABLE_PROCESSED_INPUT 是关键开关** | 此 bit 决定 Ctrl+C 是走"信号路径"（CTRL_C_EVENT → SIGINT）还是"键盘路径"（KEY_EVENT 0x03 → Event::CtrlC）。FTXUI 在 Windows 上不清除它，必须手动处理 |
+| **诊断日志必须覆盖"修复代码是否执行"** | 每次修复都要在修复代码本身里加日志，而不只在出口处加日志。这次教训：v0.9.11 的日志只有 `[EXIT]` 没有 `[INIT] SIGINT overridden`，说明修复代码根本没跑，而不是修复失效 |
+
+### 13.5 可测试性说明
+
+ENABLE_PROCESSED_INPUT 的设置是 OS 级别行为，无法在 gtest 中模拟。已有的 `MiscKeysTest.CtrlCWithSelectionDoesNotExit` 和 `MiscKeysTest.CtrlCInNoneModeDoesNotChangeState` 覆盖了 `Event::CtrlC` 的键盘事件路径（CatchEvent 行为），这是单元测试能达到的最深层。OS 级别的 Ctrl+C 行为需要手动集成测试验证。
+
+---
+
+## 14. 控制字符渲染修复（v0.9.13）
+
+### 14.1 问题描述
+
+打开含二进制内容的日志文件（如 LevelDB 日志），向右滚动后第一行开头和第二行结尾出现画面错乱——内容互相覆盖。
+
+### 14.2 根本原因
+
+FTXUI 的 `Screen::ToString()` 直接输出 `pixel.character`，**不对控制字符做任何转义**：
+
+```cpp
+// FTXUI screen.cpp
+ss << pixel.character;  // 直接输出，\r 会被终端解释为 CR
+```
+
+当日志行内含 `\r`（0x0D）时，FTXUI 将其放入 Screen 像素格，输出时终端收到裸 `\r`，将光标移至列 0，后续字符覆盖当前行开头，导致视觉混乱。
+
+### 14.3 修复
+
+在 `renderColoredLine`（`render_utils.cpp`）中，所有 `text(segment)` 调用之前先过 `sanitizeControlChars()`：
+
+```cpp
+static std::string sanitizeControlChars(std::string_view s) {
+    std::string out(s);
+    for (auto& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (uc < 0x20 || uc == 0x7F)
+            c = '.';   // 1 byte → 1 byte，span 字节偏移不变
+    }
+    return out;
+}
+```
+
+选用 `'.'` 替换原则：
+- 1 byte → 1 byte：ColorSpan/SearchSpan/SelectionSpan 的字节偏移完全不受影响
+- 显示宽度 1 列：不改变行的可视宽度，hScroll 对齐不受影响
+- 0x80–0xFF 保留：合法 UTF-8 续字节和首字节不被误替换
+
+### 14.4 测试覆盖
+
+见 `tests/render/control_char_render_test.cpp`：验证含 `\r`、`\0`、`\x01` 的行渲染后在对应位置显示 `'.'`，不出现原始控制字符。
+

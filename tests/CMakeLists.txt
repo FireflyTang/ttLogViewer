@@ -43,6 +43,7 @@ add_executable(ttLogViewer_tests
     render/search_highlight_render_test.cpp
     render/selection_render_test.cpp
     render/input_cursor_render_test.cpp
+    render/control_char_render_test.cpp
 
     # Post-v0.9.9 bug fixes (#24-#32)
     e2e/misc_keys_test.cpp

@@ -5,6 +5,22 @@
 
 using namespace ftxui;
 
+// ── Control character sanitization ─────────────────────────────────────────────
+// Replace ASCII control characters (0x00–0x1F, 0x7F) with '.' so they do not
+// reach the terminal as raw bytes (e.g. \r moves the cursor to column 0,
+// corrupting the display).  Bytes 0x80–0xFF are preserved as-is since they are
+// valid UTF-8 continuation/lead bytes.  '.' replaces 1 byte with 1 byte so
+// span byte offsets remain valid.
+static std::string sanitizeControlChars(std::string_view s) {
+    std::string out(s);
+    for (auto& c : out) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (uc < 0x20 || uc == 0x7F)
+            c = '.';
+    }
+    return out;
+}
+
 // ── UTF-8 helpers ──────────────────────────────────────────────────────────────
 
 bool isUtf8Boundary(std::string_view s, size_t pos) {
@@ -191,8 +207,8 @@ Element renderColoredLine(std::string_view content,
     // Fast path: no spans at all
     if (clippedSpans.empty() && clippedSearchSpans.empty() && clippedSelSpans.empty()) {
         if (folded && terminalWidth > 1)
-            return hbox({ text(std::string(content)), text("…") | dim });
-        return text(std::string(content));
+            return hbox({ text(sanitizeControlChars(content)), text("…") | dim });
+        return text(sanitizeControlChars(content));
     }
 
     // Collect all boundary points from all span types, then render each segment
@@ -230,7 +246,7 @@ Element renderColoredLine(std::string_view content,
         for (const auto& s : clippedSelSpans)
             if (s.start <= a && b <= s.end) { isSelected = true; break; }
 
-        Element e = text(std::string(content.substr(a, len)));
+        Element e = text(sanitizeControlChars(content.substr(a, len)));
 
         if (isSelected) {
             e = e | bgcolor(Color::Blue) | color(Color::White);
@@ -252,7 +268,7 @@ Element renderColoredLine(std::string_view content,
     }
 
     if (parts.empty())
-        return text(std::string(content));
+        return text(sanitizeControlChars(content));
 
     // Append "…" indicator for folded lines
     if (folded && terminalWidth > 1)
