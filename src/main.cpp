@@ -1,8 +1,29 @@
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+// ── Ctrl+C diagnostic log (writes to %TEMP%/ttlv_debug.log) ────────────────
+static std::ofstream& debugLogStream() {
+    static std::ofstream f([]() -> std::string {
+#ifdef _WIN32
+        const char* tmp = getenv("TEMP");
+        return std::string(tmp ? tmp : ".") + "/ttlv_debug.log";
+#else
+        return "/tmp/ttlv_debug.log";
+#endif
+    }(), std::ios::app);
+    return f;
+}
+static void debugLog(const char* msg) {
+    debugLogStream() << msg << std::endl;  // flush immediately
+}
 
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -12,6 +33,20 @@
 #include "filter_chain.hpp"
 #include "log_reader.hpp"
 #include "render.hpp"
+
+#ifdef _WIN32
+// Suppress the default CTRL_C_EVENT handler that terminates the process.
+// FTXUI delivers Ctrl+C as a keyboard event; without this handler the OS
+// kills the process before CatchEvent ever sees the key.
+static BOOL WINAPI ctrlHandler(DWORD type) {
+    if (type == CTRL_C_EVENT) {
+        debugLog("[PATH-A] ctrlHandler: CTRL_C_EVENT received, returning TRUE");
+        return TRUE;
+    }
+    debugLog("[PATH-A] ctrlHandler: non-CtrlC event, returning FALSE");
+    return FALSE;
+}
+#endif
 
 // Return the path to the per-user session file.
 static std::string sessionPath() {
@@ -30,6 +65,10 @@ static std::string sessionPath() {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetConsoleCtrlHandler(ctrlHandler, TRUE);
+#endif
+
     // Load user config overrides before anything else.
     // A missing or unparseable config file is silently ignored (all defaults apply).
     AppConfig::loadGlobal();
@@ -41,6 +80,12 @@ int main(int argc, char* argv[]) {
     // Create screen before injecting PostFn so the lambda captures a valid ref
     // Note: FTXUI v6 has mouse tracking enabled by default (track_mouse_ = true).
     auto screen = ftxui::ScreenInteractive::TerminalOutput();
+
+    // FTXUI v6 defaults force_handle_ctrl_c_=true, which means FTXUI always calls
+    // RecordSignal(SIGABRT) on Ctrl+C regardless of whether CatchEvent returns true.
+    // Disabling this lets our CatchEvent handler suppress the exit (copy to clipboard).
+    screen.ForceHandleCtrlC(false);
+    debugLog("[INIT] ForceHandleCtrlC(false) called");
 
     // Inject async post function so background threads can safely notify UI.
     // After executing the task, post Event::Custom to invalidate the frame and
@@ -69,7 +114,9 @@ int main(int argc, char* argv[]) {
     }
 
     auto component = CreateMainComponent(controller, screen);
+    debugLog("[INIT] Entering screen.Loop()");
     screen.Loop(component);
+    debugLog("[EXIT] screen.Loop() returned normally");
 
     // Save session on exit
     chain.save(sPath, reader.filePath(), reader.mode());

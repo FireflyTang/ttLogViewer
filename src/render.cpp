@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <string>
 
@@ -143,8 +144,14 @@ static Element renderFilterBar(const std::vector<ViewData::FilterTag>& tags) {
         Element dot = tag.enabled
             ? Element(text("⬤ ") | color(parseHexColor(tag.color)))
             : Element(text("○ ") | color(parseHexColor(tag.color)));
-        Element row = hbox({ text(std::move(label)), std::move(dot) });
-        if (tag.selected) row = row | inverted;
+        // Selected state uses explicit bgcolor instead of inverted to preserve
+        // the dot's filter color as foreground (inverted would swap fg/bg).
+        Element labelElem = text(std::move(label));
+        if (tag.selected) {
+            labelElem = labelElem | color(Color::White) | bgcolor(Color::GrayDark);
+            dot = dot | bgcolor(Color::GrayDark);
+        }
+        Element row = hbox({ std::move(labelElem), std::move(dot) });
         if (!tag.enabled) row = row | dim;
         items.push_back(std::move(row));
     }
@@ -258,10 +265,8 @@ static std::optional<Element> renderCompletionPopup(const ViewData& data) {
     const size_t total     = data.completions.size();
     const size_t showCount = std::min(total, kCompletionPopupMaxRows);
 
-    // Sliding window: selected item is at the bottom (closest to input line).
-    size_t startIdx = 0;
-    if (data.completionIndex >= showCount)
-        startIdx = data.completionIndex - showCount + 1;
+    // Use controller-managed scroll offset for stable cursor-in-window behavior.
+    size_t startIdx = data.completionScrollOffset;
     if (startIdx + showCount > total)
         startIdx = total - showCount;
 
@@ -272,23 +277,30 @@ static std::optional<Element> renderCompletionPopup(const ViewData& data) {
     const std::string borderPad(static_cast<size_t>(borderIndent), ' ');
     const std::string textPad  (static_cast<size_t>(textIndent - borderIndent), ' ');
 
-    // Determine popup width from longest visible candidate.
-    size_t maxLen = 0;
+    // Determine popup width from longest visible candidate in DISPLAY COLUMNS
+    // (not bytes — CJK characters are 2 cols wide but 3 bytes in UTF-8).
+    auto displayWidth = [](std::string_view s) -> int {
+        return byteOffsetToDisplayCol(s, 0, s.size());
+    };
+    int maxCols = 0;
     for (size_t i = startIdx; i < startIdx + showCount; ++i)
-        maxLen = std::max(maxLen, data.completions[i].size());
-    maxLen = std::max(maxLen, size_t(1));  // minimum 1
+        maxCols = std::max(maxCols, displayWidth(data.completions[i]));
+    maxCols = std::max(maxCols, 1);  // minimum 1
+
+    // Content between │ borders = textPad (2 cols) + ">" (1 col) + candidate (maxCols) = maxCols+3 cols.
+    const int innerCols = maxCols + 3;
 
     // '─' (U+2500) is 3 bytes in UTF-8; build the border line by string concatenation.
-    // Content between │ borders = textPad (2 cols) + entry (maxLen+1 cols) = maxLen+3 cols.
     std::string hLine;
-    hLine.reserve((maxLen + 3) * 3);
-    for (size_t i = 0; i < maxLen + 3; ++i) hLine += "─";
+    hLine.reserve(static_cast<size_t>(innerCols) * 3);
+    for (int i = 0; i < innerCols; ++i) hLine += "─";
 
     Elements rows;
 
     // ▲ indicator: shown when items exist above the visible window.
     if (startIdx > 0) {
-        const std::string arrowLine = " ▲" + std::string(maxLen, ' ');
+        // " ▲" = 2 display cols, pad remainder with spaces.
+        const std::string arrowLine = " ▲" + std::string(static_cast<size_t>(innerCols - 2), ' ');
         rows.push_back(hbox({ text(borderPad), text("│"), text(arrowLine), text("│") }));
     }
 
@@ -296,8 +308,10 @@ static std::optional<Element> renderCompletionPopup(const ViewData& data) {
     for (size_t i = startIdx; i < startIdx + showCount; ++i) {
         const bool selected = (i == data.completionIndex);
         std::string entry   = (selected ? ">" : " ") + data.completions[i];
-        // Pad to fixed width (O(1), idiomatic).
-        entry.resize(maxLen + 1, ' ');
+        // Pad with spaces to reach innerCols DISPLAY columns.
+        const int entryCols = 1 + displayWidth(data.completions[i]);  // prefix char + candidate
+        if (entryCols < innerCols)
+            entry += std::string(static_cast<size_t>(innerCols - entryCols), ' ');
         Element cell = text(textPad + entry) | (selected ? inverted : nothing);
         rows.push_back(hbox({ text(borderPad), text("│"), cell, text("│") }));
     }
@@ -432,7 +446,7 @@ static bool handleMouseEvent(AppController& controller, Event event) {
         const int hStep      = AppConfig::global().hScrollStep;
         if (m.x < prefixCols) {
             controller.scrollHorizontal(anchorPane, -hStep);
-        } else if (m.x >= termW) {
+        } else if (m.x >= termW - 1) {
             controller.scrollHorizontal(anchorPane, +hStep);
         }
 
@@ -537,13 +551,31 @@ Component CreateMainComponent(AppController& controller,
         }
 
         // Ctrl+C: copy selection to clipboard (only in normal mode, no dialog).
-        // Always consume CtrlC here so it does not fall through to the terminal's
-        // CTRL_C_EVENT handler (which would terminate the process on Windows).
-        if (event == Event::CtrlC
-                && !controller.isInputActive()
-                && !controller.isDialogOpen()) {
-            if (controller.hasSelection())
-                controller.copySelectionToClipboard();
+        // Always consume CtrlC here so it does not fall through to FTXUI's
+        // RecordSignal(SIGABRT) which would exit the loop.
+        if (event == Event::CtrlC) {
+            // Log to %TEMP%/ttlv_debug.log for diagnosis.
+            {
+                static std::ofstream dbg([]() -> std::string {
+#ifdef _WIN32
+                    const char* t = getenv("TEMP");
+                    return std::string(t ? t : ".") + "/ttlv_debug.log";
+#else
+                    return "/tmp/ttlv_debug.log";
+#endif
+                }(), std::ios::app);
+                dbg << "[PATH-C] CatchEvent: Event::CtrlC matched"
+                    << " inputActive=" << controller.isInputActive()
+                    << " dialogOpen=" << controller.isDialogOpen()
+                    << " hasSel=" << controller.hasSelection()
+                    << " → returning true" << std::endl;
+            }
+            if (!controller.isInputActive() && !controller.isDialogOpen()) {
+                if (controller.hasSelection())
+                    controller.copySelectionToClipboard();
+            }
+            // ALWAYS return true to prevent FTXUI from exiting,
+            // regardless of input/dialog state.
             return true;
         }
 

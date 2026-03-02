@@ -254,6 +254,97 @@ TEST_F(CompletionTest, CompletionIndexWrapsCorrectly) {
     EXPECT_EQ(data().completionIndex, 0u);
 }
 
+// ── #32b: Completion scroll offset ─────────────────────────────────────────────
+
+TEST_F(CompletionTest, ScrollOffsetStartsAtZero) {
+    // "a" matches 3+ items; popup opens with scrollOffset=0.
+    const std::string prefix = (tmpDir_ / "a").string();
+    openFileMode(prefix);
+    key(ftxui::Event::Tab);
+
+    auto d = data();
+    ASSERT_TRUE(d.showCompletions);
+    EXPECT_EQ(d.completionScrollOffset, 0u);
+    EXPECT_EQ(d.completionIndex, 0u);
+}
+
+TEST_F(CompletionTest, ArrowDownMovesWithinWindow) {
+    // With 3+ completions and maxVisible=3, ArrowDown should keep cursor
+    // in the window without scrolling until we hit the bottom.
+    const std::string prefix = (tmpDir_ / "a").string();
+    openFileMode(prefix);
+    key(ftxui::Event::Tab);
+
+    auto d0 = data();
+    ASSERT_TRUE(d0.showCompletions);
+    ASSERT_GE(d0.completions.size(), 3u);
+
+    key(ftxui::Event::ArrowDown);  // index=1
+    EXPECT_EQ(data().completionIndex, 1u);
+    EXPECT_EQ(data().completionScrollOffset, 0u);
+
+    key(ftxui::Event::ArrowDown);  // index=2
+    EXPECT_EQ(data().completionIndex, 2u);
+    EXPECT_EQ(data().completionScrollOffset, 0u);  // still visible in 3-row window
+}
+
+TEST_F(CompletionTest, ArrowDownScrollsWhenCursorHitsBottom) {
+    // Create enough files to need scrolling (>3 matches).
+    for (const char* name : {"alpha.txt", "bravo.txt", "charlie.txt", "delta.txt"}) {
+        std::ofstream f(tmpDir_ / name);
+        f << "test\n";
+    }
+    // All entries in tmpDir_ now: api.log, app.log, audit.log, system.log,
+    // alpha.txt, bravo.txt, charlie.txt, delta.txt, subdir/
+    // With empty prefix, list all (>3).
+    const std::string dirPrefix = tmpDir_.string() + "/";
+    openFileMode(dirPrefix);
+    key(ftxui::Event::Tab);
+
+    auto d = data();
+    ASSERT_TRUE(d.showCompletions);
+    ASSERT_GT(d.completions.size(), 3u);
+
+    // Move down past the 3-row window.
+    key(ftxui::Event::ArrowDown);  // index=1, scroll=0
+    key(ftxui::Event::ArrowDown);  // index=2, scroll=0
+    key(ftxui::Event::ArrowDown);  // index=3, scroll should now be 1
+    EXPECT_EQ(data().completionIndex, 3u);
+    EXPECT_EQ(data().completionScrollOffset, 1u);
+}
+
+TEST_F(CompletionTest, ArrowUpScrollsWhenCursorHitsTop) {
+    // Same setup with many files.
+    for (const char* name : {"alpha.txt", "bravo.txt", "charlie.txt", "delta.txt"}) {
+        std::ofstream f(tmpDir_ / name);
+        f << "test\n";
+    }
+    const std::string dirPrefix = tmpDir_.string() + "/";
+    openFileMode(dirPrefix);
+    key(ftxui::Event::Tab);
+
+    ASSERT_GT(data().completions.size(), 3u);
+
+    // Move down to index=3 (scroll=1).
+    for (int i = 0; i < 3; ++i) key(ftxui::Event::ArrowDown);
+    EXPECT_EQ(data().completionScrollOffset, 1u);
+
+    // Move up: index=2, still in window (scroll=1).
+    key(ftxui::Event::ArrowUp);
+    EXPECT_EQ(data().completionIndex, 2u);
+    EXPECT_EQ(data().completionScrollOffset, 1u);
+
+    // Move up more: index=1, scroll should decrease to 1 (still visible).
+    key(ftxui::Event::ArrowUp);
+    EXPECT_EQ(data().completionIndex, 1u);
+    EXPECT_EQ(data().completionScrollOffset, 1u);
+
+    // index=0, scroll should decrease to 0.
+    key(ftxui::Event::ArrowUp);
+    EXPECT_EQ(data().completionIndex, 0u);
+    EXPECT_EQ(data().completionScrollOffset, 0u);
+}
+
 // ── ViewData completionCol is set correctly ───────────────────────────────────
 
 TEST_F(CompletionTest, CompletionColReflectsFilenameStart) {

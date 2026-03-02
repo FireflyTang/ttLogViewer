@@ -111,10 +111,11 @@ struct ViewData {
     bool        hasSelection      = false;  // true when character-level selection is active
 
     // ── Tab completion popup (OpenFile mode) ─────────────────────────────────
-    bool                     showCompletions  = false;
-    std::vector<std::string> completions;      // filename-only candidates
-    size_t                   completionIndex  = 0;    // 0-based index of highlighted item
-    int                      completionCol    = 0;    // terminal column where filename text starts
+    bool                     showCompletions       = false;
+    std::vector<std::string> completions;           // filename-only candidates
+    size_t                   completionIndex       = 0;    // 0-based index of highlighted item
+    size_t                   completionScrollOffset = 0;   // first visible item in popup window
+    int                      completionCol         = 0;    // terminal column where filename text starts
 };
 
 // ── AppController ──────────────────────────────────────────────────────────────
@@ -346,8 +347,9 @@ private:
 
     // ── Completion state (OpenFile mode) ─────────────────────────────────────
     std::vector<std::string> completions_;
-    size_t                   completionIndex_ = 0;
-    bool                     showCompletions_ = false;
+    size_t                   completionIndex_        = 0;
+    size_t                   completionScrollOffset_ = 0;
+    bool                     showCompletions_        = false;
 
     void triggerCompletion();
     void acceptCompletion();

@@ -334,3 +334,20 @@ TEST_F(SelectionTest, ScreenColToByteOffsetOutOfBoundsReturnsZero) {
     const size_t byte = ctrl_.screenColToByteOffset(FocusArea::Raw, 9999, 10);
     EXPECT_EQ(byte, 0u);
 }
+
+// ── #30: Horizontal scroll helper ───────────────────────────────────────────
+
+TEST_F(SelectionTest, ScrollHorizontalRight) {
+    auto d0 = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(d0.rawHScroll, 0u);
+
+    ctrl_.scrollHorizontal(FocusArea::Raw, 4);
+    auto d1 = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(d1.rawHScroll, 4u);
+}
+
+TEST_F(SelectionTest, ScrollHorizontalLeftClampsAtZero) {
+    ctrl_.scrollHorizontal(FocusArea::Raw, -4);  // should not underflow
+    auto d = ctrl_.getViewData(5, 5);
+    EXPECT_EQ(d.rawHScroll, 0u);
+}

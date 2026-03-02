@@ -531,6 +531,9 @@ bool AppController::handleKeyGotoLine(const Event& event) {
 
 namespace {
 
+// Maximum visible rows in the completion popup (must match render.cpp).
+static constexpr size_t kCompletionMaxVisible = 3;
+
 // Split a path into (directory_prefix, filename_prefix).
 // The directory prefix is everything up to and including the last '/' or '\'.
 // If no separator, dir = "" (meaning current directory).
@@ -575,10 +578,20 @@ static std::vector<std::string> getFileCompletions(const std::string& dirStr,
 // ── OpenFile mode ─────────────────────────────────────────────────────────────
 
 bool AppController::handleKeyOpenFile(const Event& event) {
+    // Helper: ensure completionIndex_ is visible within the scroll window.
+    auto ensureCompletionVisible = [this]() {
+        const size_t showCount = std::min(completions_.size(), kCompletionMaxVisible);
+        if (completionIndex_ < completionScrollOffset_)
+            completionScrollOffset_ = completionIndex_;
+        else if (completionIndex_ >= completionScrollOffset_ + showCount)
+            completionScrollOffset_ = completionIndex_ - showCount + 1;
+    };
+
     // ── Tab: trigger or cycle completions ─────────────────────────────────────
     if (event == Event::Tab) {
         if (showCompletions_ && !completions_.empty()) {
             completionIndex_ = (completionIndex_ + 1) % completions_.size();
+            ensureCompletionVisible();
         } else {
             triggerCompletion();
         }
@@ -589,12 +602,14 @@ bool AppController::handleKeyOpenFile(const Event& event) {
     if (showCompletions_ && !completions_.empty()) {
         if (event == Event::ArrowDown) {
             completionIndex_ = (completionIndex_ + 1) % completions_.size();
+            ensureCompletionVisible();
             return true;
         }
         if (event == Event::ArrowUp) {
             completionIndex_ = (completionIndex_ == 0)
                                ? completions_.size() - 1
                                : completionIndex_ - 1;
+            ensureCompletionVisible();
             return true;
         }
         if (event == Event::Return) {
@@ -605,6 +620,7 @@ bool AppController::handleKeyOpenFile(const Event& event) {
             showCompletions_ = false;
             completions_.clear();
             completionIndex_ = 0;
+            completionScrollOffset_ = 0;
             recomputePaneHeights();
             return true;
         }
@@ -613,6 +629,7 @@ bool AppController::handleKeyOpenFile(const Event& event) {
             showCompletions_ = false;
             completions_.clear();
             completionIndex_ = 0;
+            completionScrollOffset_ = 0;
             recomputePaneHeights();
             // Fall through to handleCommonInputKeys below.
         }
@@ -647,6 +664,7 @@ void AppController::triggerCompletion() {
     auto [dir, filePrefix] = splitPathForCompletion(inputBuffer_);
     completions_ = getFileCompletions(dir, filePrefix);
     completionIndex_ = 0;
+    completionScrollOffset_ = 0;
 
     if (completions_.empty()) {
         showCompletions_ = false;
@@ -678,6 +696,7 @@ void AppController::acceptCompletion() {
     showCompletions_ = false;
     completions_.clear();
     completionIndex_ = 0;
+    completionScrollOffset_ = 0;
     recomputePaneHeights();
     // If user selected a directory, immediately show the next level.
     if (candidate.back() == '/')
@@ -921,9 +940,10 @@ ViewData AppController::getViewData(int rawPaneHeight, int filteredPaneHeight) {
     data.hasSelection      = selection_.active;
 
     // ── Completion popup ──────────────────────────────────────────────────────
-    data.showCompletions = showCompletions_;
-    data.completions     = completions_;
-    data.completionIndex = completionIndex_;
+    data.showCompletions       = showCompletions_;
+    data.completions           = completions_;
+    data.completionIndex       = completionIndex_;
+    data.completionScrollOffset = completionScrollOffset_;
     if (showCompletions_ && !completions_.empty()) {
         // completionCol = display column where the filename part starts in the input line.
         // = len(inputPrompt_) + display width of directory prefix.
@@ -1010,6 +1030,7 @@ void AppController::exitInputMode() {
     showCompletions_ = false;
     completions_.clear();
     completionIndex_ = 0;
+    completionScrollOffset_ = 0;
     recomputePaneHeights();
 }
 
