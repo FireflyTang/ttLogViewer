@@ -1,3 +1,4 @@
+#include <csignal>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -112,6 +113,16 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
     }
+
+    // Override FTXUI's SIGINT handler AFTER it installs its own (inside Loop()).
+    // On MSYS2/mintty (POSIX PTY), Ctrl+C sends SIGINT directly — not a Win32
+    // console event.  FTXUI's default handler sets signal_ which exits the loop.
+    // By posting SIG_IGN we ensure SIGINT is harmless; the Ctrl+C keyboard event
+    // still reaches CatchEvent as Event::CtrlC for copy-to-clipboard handling.
+    screen.Post([]() {
+        std::signal(SIGINT, SIG_IGN);
+        debugLog("[INIT] SIGINT handler overridden to SIG_IGN");
+    });
 
     auto component = CreateMainComponent(controller, screen);
     debugLog("[INIT] Entering screen.Loop()");

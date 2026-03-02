@@ -1114,6 +1114,11 @@ bool AppController::handleCommonInputKeys(const Event& event, bool allowCharacte
         return handleInputBackspace();
     }
 
+    // Handle Delete key (delete character AFTER cursor)
+    if (event == Event::Delete) {
+        return handleInputDelete();
+    }
+
     // Handle character input if allowed
     if (allowCharacters && event.is_character()) {
         inputBuffer_.insert(inputCursorPos_, event.character());
@@ -1137,6 +1142,22 @@ bool AppController::handleInputBackspace() {
         --start;
     inputBuffer_.erase(start, inputCursorPos_ - start);
     inputCursorPos_ = start;
+    // Validate for filter and search input modes
+    if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
+            || inputMode_ == InputMode::Search) {
+        validateInputRegex();
+    }
+    return true;
+}
+
+bool AppController::handleInputDelete() {
+    if (inputCursorPos_ >= inputBuffer_.size()) return true;  // nothing after cursor
+    // Find the end of the UTF-8 codepoint at the cursor position.
+    size_t end = inputCursorPos_ + 1;
+    while (end < inputBuffer_.size() && !isUtf8Boundary(inputBuffer_, end))
+        ++end;
+    inputBuffer_.erase(inputCursorPos_, end - inputCursorPos_);
+    // Cursor stays at the same position.
     // Validate for filter and search input modes
     if (inputMode_ == InputMode::FilterAdd || inputMode_ == InputMode::FilterEdit
             || inputMode_ == InputMode::Search) {

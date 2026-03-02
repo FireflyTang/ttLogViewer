@@ -38,6 +38,9 @@ add_executable(ttLogViewer_tests
     # Pre-1.0 quality: ESC priority, GoTo boundaries, exclude filter
     e2e/esc_priority_test.cpp
 
+    # Completion popup render alignment
+    render/completion_popup_test.cpp
+
     # Post-v0.9.9 bug fixes (#24-#32)
     e2e/misc_keys_test.cpp
     e2e/input_cursor_test.cpp

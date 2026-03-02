@@ -110,3 +110,42 @@ TEST_F(InputCursorTest, BackspaceAtCursorPosition) {
     EXPECT_EQ(d.inputBuffer, "ac");
     EXPECT_EQ(d.inputCursorPos, 1u);
 }
+
+// ── Delete key ──────────────────────────────────────────────────────────────
+
+TEST_F(InputCursorTest, DeleteAtCursorPosition) {
+    enterSearch("abc");
+    key(ftxui::Event::Home);       // cursor at 0
+    key(ftxui::Event::Delete);     // deletes 'a'
+    auto d = data();
+    EXPECT_EQ(d.inputBuffer, "bc");
+    EXPECT_EQ(d.inputCursorPos, 0u);
+}
+
+TEST_F(InputCursorTest, DeleteAtEndDoesNothing) {
+    enterSearch("abc");
+    // cursor at end (3)
+    key(ftxui::Event::Delete);
+    auto d = data();
+    EXPECT_EQ(d.inputBuffer, "abc");
+    EXPECT_EQ(d.inputCursorPos, 3u);
+}
+
+TEST_F(InputCursorTest, DeleteInMiddle) {
+    enterSearch("abcd");
+    key(ftxui::Event::ArrowLeft);  // cursor at 3
+    key(ftxui::Event::ArrowLeft);  // cursor at 2
+    key(ftxui::Event::Delete);     // deletes 'c'
+    auto d = data();
+    EXPECT_EQ(d.inputBuffer, "abd");
+    EXPECT_EQ(d.inputCursorPos, 2u);
+}
+
+TEST_F(InputCursorTest, DeleteWorksInOpenFileMode) {
+    enterOpenFile("test.log");
+    key(ftxui::Event::Home);
+    key(ftxui::Event::Delete);     // deletes 't'
+    auto d = data();
+    EXPECT_EQ(d.inputBuffer, "est.log");
+    EXPECT_EQ(d.inputCursorPos, 0u);
+}

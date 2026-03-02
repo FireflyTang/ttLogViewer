@@ -305,13 +305,16 @@ static std::optional<Element> renderCompletionPopup(const ViewData& data) {
     }
 
     // Content rows.
+    // textPad is prepended inside the cell, so entry only needs to fill
+    // (innerCols - textPadCols) display columns to keep total == innerCols.
+    const int textPadCols = static_cast<int>(textPad.size());  // ASCII spaces = display cols
+    const int entryTarget = innerCols - textPadCols;
     for (size_t i = startIdx; i < startIdx + showCount; ++i) {
         const bool selected = (i == data.completionIndex);
         std::string entry   = (selected ? ">" : " ") + data.completions[i];
-        // Pad with spaces to reach innerCols DISPLAY columns.
-        const int entryCols = 1 + displayWidth(data.completions[i]);  // prefix char + candidate
-        if (entryCols < innerCols)
-            entry += std::string(static_cast<size_t>(innerCols - entryCols), ' ');
+        const int entryCols = 1 + displayWidth(data.completions[i]);
+        if (entryCols < entryTarget)
+            entry += std::string(static_cast<size_t>(entryTarget - entryCols), ' ');
         Element cell = text(textPad + entry) | (selected ? inverted : nothing);
         rows.push_back(hbox({ text(borderPad), text("│"), cell, text("│") }));
     }

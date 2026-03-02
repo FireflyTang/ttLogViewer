@@ -321,6 +321,7 @@ private:
     // Common input handling patterns
     bool handleCommonInputKeys(const ftxui::Event& event, bool allowCharacters = true);
     bool handleInputBackspace();
+    bool handleInputDelete();
 
     // ── Filter helpers ────────────────────────────────────────────────────────
     static const char* nextPaletteColor(size_t idx);
