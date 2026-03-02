@@ -38,8 +38,11 @@ add_executable(ttLogViewer_tests
     # Pre-1.0 quality: ESC priority, GoTo boundaries, exclude filter
     e2e/esc_priority_test.cpp
 
-    # Completion popup render alignment
+    # Render-layer tests (high + medium priority)
     render/completion_popup_test.cpp
+    render/search_highlight_render_test.cpp
+    render/selection_render_test.cpp
+    render/input_cursor_render_test.cpp
 
     # Post-v0.9.9 bug fixes (#24-#32)
     e2e/misc_keys_test.cpp

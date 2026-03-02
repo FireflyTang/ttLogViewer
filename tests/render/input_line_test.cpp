@@ -91,3 +91,39 @@ TEST_F(InputLineTest, SearchNoResultsShowsText) {
     key(ftxui::Event::Return);
     EXPECT_NE(renderCtrl().find("无结果"), std::string::npos);
 }
+
+// ── Hints line changes with state ───────────────────────────────────────────
+
+TEST_F(InputLineTest, FilterInputShowsTabHint) {
+    key(ftxui::Event::Character('a'));
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("Tab"), std::string::npos)
+        << "Filter input should show Tab hint for mode switching";
+}
+
+TEST_F(InputLineTest, NormalModeShowsQuitHint) {
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("退出"), std::string::npos)
+        << "Normal mode should show quit hint";
+}
+
+TEST_F(InputLineTest, NormalModeShowsDragHint) {
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("拖拽"), std::string::npos)
+        << "Normal mode should show drag-to-select hint";
+}
+
+TEST_F(InputLineTest, ExcludeModeShowsExcludeTag) {
+    key(ftxui::Event::Character('a'));
+    key(ftxui::Event::Tab);  // → str-exclude
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("排除"), std::string::npos)
+        << "Exclude mode should show '排除' tag";
+}
+
+TEST_F(InputLineTest, SearchInputShowsPasteHint) {
+    key(ftxui::Event::Character('/'));
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("Ctrl+V"), std::string::npos)
+        << "Search input should show paste hint";
+}

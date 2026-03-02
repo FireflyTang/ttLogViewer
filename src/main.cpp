@@ -37,15 +37,34 @@ static void debugLog(const char* msg) {
 
 #ifdef _WIN32
 // Suppress the default CTRL_C_EVENT handler that terminates the process.
-// FTXUI delivers Ctrl+C as a keyboard event; without this handler the OS
-// kills the process before CatchEvent ever sees the key.
 static BOOL WINAPI ctrlHandler(DWORD type) {
     if (type == CTRL_C_EVENT) {
-        debugLog("[PATH-A] ctrlHandler: CTRL_C_EVENT received, returning TRUE");
+        debugLog("[CTRL] ctrlHandler: CTRL_C_EVENT suppressed");
         return TRUE;
     }
-    debugLog("[PATH-A] ctrlHandler: non-CtrlC event, returning FALSE");
     return FALSE;
+}
+
+// Disable ENABLE_PROCESSED_INPUT on the console so Ctrl+C is delivered as
+// keyboard input (byte 0x03 → Event::CtrlC) instead of generating a
+// CTRL_C_EVENT / SIGINT signal.  Must be called AFTER FTXUI's Install()
+// sets up its own console mode (via screen.Post inside Loop).
+static void disableProcessedInput() {
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (GetConsoleMode(hIn, &mode)) {
+        const DWORD ENABLE_PROCESSED_INPUT_FLAG = 0x0001;
+        if (mode & ENABLE_PROCESSED_INPUT_FLAG) {
+            mode &= ~ENABLE_PROCESSED_INPUT_FLAG;
+            SetConsoleMode(hIn, mode);
+            debugLog("[INIT] ENABLE_PROCESSED_INPUT disabled on console input");
+        } else {
+            debugLog("[INIT] ENABLE_PROCESSED_INPUT was already off");
+        }
+    } else {
+        // Not a real console (e.g. mintty PTY pipe) — console API unavailable.
+        debugLog("[INIT] GetConsoleMode failed (not a real console)");
+    }
 }
 #endif
 
@@ -67,6 +86,9 @@ static std::string sessionPath() {
 
 int main(int argc, char* argv[]) {
 #ifdef _WIN32
+    // Layer 1: Process-level Ctrl+C ignore (prevents default ExitProcess).
+    SetConsoleCtrlHandler(NULL, TRUE);
+    // Layer 2: Custom handler as fallback (returns TRUE for CTRL_C_EVENT).
     SetConsoleCtrlHandler(ctrlHandler, TRUE);
 #endif
 
@@ -114,12 +136,22 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Override FTXUI's SIGINT handler AFTER it installs its own (inside Loop()).
-    // On MSYS2/mintty (POSIX PTY), Ctrl+C sends SIGINT directly — not a Win32
-    // console event.  FTXUI's default handler sets signal_ which exits the loop.
-    // By posting SIG_IGN we ensure SIGINT is harmless; the Ctrl+C keyboard event
-    // still reaches CatchEvent as Event::CtrlC for copy-to-clipboard handling.
+    // ── Ctrl+C defense: runs AFTER FTXUI Install() inside Loop() ──────────
+    // FTXUI's Install() registers std::signal(SIGINT, RecordSignal) and sets
+    // console mode.  We must override BOTH after Install() runs.
+    //
+    // Root cause: FTXUI on _WIN32 keeps ENABLE_PROCESSED_INPUT enabled, so
+    // Ctrl+C generates CTRL_C_EVENT → CRT raises SIGINT → RecordSignal →
+    // g_signal_exit_count++ → ExecuteSignalHandlers → Exit().  This path
+    // bypasses ForceHandleCtrlC and CatchEvent entirely.
+    //
+    // Fix: disable ENABLE_PROCESSED_INPUT so Ctrl+C becomes keyboard input
+    // (byte 0x03).  FTXUI's VT parser converts it to Event::CtrlC, which
+    // our CatchEvent handles for copy-to-clipboard.
     screen.Post([]() {
+#ifdef _WIN32
+        disableProcessedInput();
+#endif
         std::signal(SIGINT, SIG_IGN);
         debugLog("[INIT] SIGINT handler overridden to SIG_IGN");
     });

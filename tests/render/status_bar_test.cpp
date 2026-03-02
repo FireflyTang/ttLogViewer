@@ -55,3 +55,49 @@ TEST(StatusBarThousands, LargeLineCountFormatted) {
     // 1001 lines should be formatted as "1,001"
     EXPECT_NE(out.find("1,001"), std::string::npos);
 }
+
+// ── Status bar background color ─────────────────────────────────────────────
+
+TEST_F(StatusBarTest, StatusBarHasGrayDarkBackground) {
+    auto comp = CreateMainComponent(ctrl_, screen_);
+    ctrl_.onTerminalResize(80, 20);
+    auto scr = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
+                                      ftxui::Dimension::Fixed(20));
+    ftxui::Render(scr, comp->Render());
+
+    // The status bar is the first rendered row. Check for GrayDark bg.
+    bool hasGrayDark = false;
+    for (int x = 0; x < 80; ++x) {
+        if (scr.PixelAt(x, 0).background_color == ftxui::Color::GrayDark) {
+            hasGrayDark = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasGrayDark)
+        << "Status bar should have GrayDark background color";
+}
+
+// ── Status bar shows separator ──────────────────────────────────────────────
+
+TEST_F(StatusBarTest, StatusBarShowsSeparator) {
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("│"), std::string::npos)
+        << "Status bar should show │ separator between fields";
+}
+
+// ── No file open shows placeholder ──────────────────────────────────────────
+
+TEST(StatusBarNoFile, ShowsPlaceholder) {
+    LogReader reader;
+    FilterChain chain(reader);
+    AppController ctrl(reader, chain);
+    auto scr = ftxui::ScreenInteractive::TerminalOutput();
+    auto comp = CreateMainComponent(ctrl, scr);
+    ctrl.onTerminalResize(80, 20);
+
+    auto s = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
+                                    ftxui::Dimension::Fixed(20));
+    ftxui::Render(s, comp->Render());
+    std::string out = s.ToString();
+    EXPECT_NE(out.find("未打开文件"), std::string::npos);
+}

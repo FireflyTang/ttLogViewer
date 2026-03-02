@@ -101,3 +101,55 @@ TEST_F(FilterBarTest, UnselectedFilterDotHasDefaultBackground) {
     // Unselected: background should be default (not GrayDark).
     EXPECT_NE(pixel.background_color, ftxui::Color::GrayDark);
 }
+
+// ── Multiple filter dots have distinct colors ────────────────────────────────
+
+TEST_F(FilterBarTest, MultipleFilterDotsHaveDistinctColors) {
+    chain_.append({.pattern = "A", .color = "#FF5555", .enabled = true});
+    chain_.append({.pattern = "B", .color = "#55FF55", .enabled = true});
+    chain_.append({.pattern = "C", .color = "#5555FF", .enabled = true});
+
+    auto scr = renderScreen();
+    std::vector<ftxui::Color> dotColors;
+    for (int y = 0; y < scr.dimy(); ++y)
+        for (int x = 0; x < scr.dimx(); ++x)
+            if (scr.PixelAt(x, y).character == "⬤")
+                dotColors.push_back(scr.PixelAt(x, y).foreground_color);
+
+    ASSERT_GE(dotColors.size(), 3u) << "Expected at least 3 dots";
+    EXPECT_NE(dotColors[0], dotColors[1]);
+    EXPECT_NE(dotColors[1], dotColors[2]);
+    EXPECT_NE(dotColors[0], dotColors[2]);
+}
+
+// ── Disabled filter dot retains filter color ─────────────────────────────────
+
+TEST_F(FilterBarTest, DisabledFilterDotRetainsColor) {
+    chain_.append({.pattern = "A", .color = "#FF5555", .enabled = false});
+    auto scr = renderScreen();
+    auto [x, y] = findPixel(scr, "○");
+    ASSERT_GE(x, 0) << "○ not found";
+    EXPECT_EQ(scr.PixelAt(x, y).foreground_color, ftxui::Color::RGB(255, 85, 85));
+}
+
+// ── Exclude filter shows ! mark ──────────────────────────────────────────────
+
+TEST_F(FilterBarTest, ExcludeFilterShowsExcludeMark) {
+    chain_.append({.pattern = "DEBUG", .color = "#AAAAAA", .enabled = true,
+                   .exclude = true});
+    auto scr = renderScreen();
+    std::string out = scr.ToString();
+    EXPECT_NE(out.find("!"), std::string::npos)
+        << "Exclude filter should show '!' mark in label";
+}
+
+// ── Regex filter shows R mark ────────────────────────────────────────────────
+
+TEST_F(FilterBarTest, RegexFilterShowsRegexMark) {
+    chain_.append({.pattern = "ERR.*", .color = "#FF5555", .enabled = true,
+                   .useRegex = true});
+    auto scr = renderScreen();
+    std::string out = scr.ToString();
+    EXPECT_NE(out.find("R:"), std::string::npos)
+        << "Regex filter should show 'R' mark in label";
+}

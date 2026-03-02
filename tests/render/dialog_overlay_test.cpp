@@ -79,3 +79,39 @@ TEST_F(DialogOverlayTest, ChoiceDialogNClosesWithoutAction) {
     key(ftxui::Event::Character('N'));
     EXPECT_FALSE(ctrl_.getViewData(3, 3).showDialog);
 }
+
+// ── Render-level dialog tests ────────────────────────────────────────────────
+
+TEST_F(DialogOverlayTest, QuitDialogRendersTitle) {
+    ctrl_.requestQuit([]() {});
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("确认退出"), std::string::npos)
+        << "Quit dialog should render its title";
+}
+
+TEST_F(DialogOverlayTest, InfoDialogRendersAnyKeyHint) {
+    using E = ftxui::Event;
+    key(E::Character('a'));
+    for (char c : std::string("ERROR")) key(E::Character(std::string(1, c)));
+    key(E::Return);
+    chain_.waitReprocess();
+    key(E::Character('e'));
+    key(E::Tab);
+    key(E::Tab);
+    for (int i = 0; i < 5; ++i) key(E::Backspace);
+    for (char c : std::string("[invalid")) key(E::Character(std::string(1, c)));
+    key(E::Return);
+
+    std::string out = renderCtrl();
+    EXPECT_NE(out.find("按任意键"), std::string::npos)
+        << "Info dialog should show '按任意键关闭' hint";
+}
+
+TEST_F(DialogOverlayTest, DialogDismissedClearsOverlay) {
+    ctrl_.requestQuit([]() {});
+    ASSERT_NE(renderCtrl().find("确认退出"), std::string::npos);
+
+    key(ftxui::Event::Character('N'));
+    EXPECT_EQ(renderCtrl().find("确认退出"), std::string::npos)
+        << "After dismissing dialog, overlay should disappear";
+}
