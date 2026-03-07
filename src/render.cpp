@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstdio>
 #include <format>
-#include <fstream>
 #include <optional>
 #include <string>
 
@@ -557,28 +556,10 @@ Component CreateMainComponent(AppController& controller,
         // Always consume CtrlC here so it does not fall through to FTXUI's
         // RecordSignal(SIGABRT) which would exit the loop.
         if (event == Event::CtrlC) {
-            // Log to %TEMP%/ttlv_debug.log for diagnosis.
-            {
-                static std::ofstream dbg([]() -> std::string {
-#ifdef _WIN32
-                    const char* t = getenv("TEMP");
-                    return std::string(t ? t : ".") + "/ttlv_debug.log";
-#else
-                    return "/tmp/ttlv_debug.log";
-#endif
-                }(), std::ios::app);
-                dbg << "[PATH-C] CatchEvent: Event::CtrlC matched"
-                    << " inputActive=" << controller.isInputActive()
-                    << " dialogOpen=" << controller.isDialogOpen()
-                    << " hasSel=" << controller.hasSelection()
-                    << " → returning true" << std::endl;
-            }
             if (!controller.isInputActive() && !controller.isDialogOpen()) {
                 if (controller.hasSelection())
                     controller.copySelectionToClipboard();
             }
-            // ALWAYS return true to prevent FTXUI from exiting,
-            // regardless of input/dialog state.
             return true;
         }
 

@@ -112,7 +112,7 @@ cmake -B build -G Ninja \
 
 ## 开发状态
 
-**v0.9.13**（452 个测试，全部通过）
+**v0.9.14**（457 个测试，全部通过）
 
 - 阶段一：框架搭建 + 静态文件浏览 ✓
 - 阶段二：过滤链 + 搜索 + 实时监控 ✓
@@ -130,7 +130,10 @@ cmake -B build -G Ninja \
 - v0.9.9：文件路径 Tab 补全（向上弹窗 + 中文路径支持）、拖拽自动滚动（竖向+横向）、选区绝对行号修复（防漂移）✓
 - v0.9.10：输入光标移动（←/→/Home/End）、补全弹窗 overlay 渲染、Ctrl+C 不退出（Windows 三层防御）、过滤器圆点颜色修复、横向自动滚动修复、补全弹窗滚动+宽度对齐 ✓
 - v0.9.11：Ctrl+C SIGINT 信号修复（MSYS2/mintty）、补全弹窗边框对齐修复、Del 键支持、补全弹窗渲染测试 ✓
+- v0.9.12：Ctrl+C 根本修复（禁用 ENABLE_PROCESSED_INPUT）、全面渲染层测试补充 ✓
+- v0.9.13：控制字符渲染修复（\r/\x01/\x7F→'.'）、渲染层测试覆盖补全 ✓
+- v0.9.14：Ctrl+C 复制修复（mintty/PTY 双路径）、CatchEvent 路径渲染测试 ✓
 
-当前测试：404 个，全部通过。
+当前测试：457 个，全部通过。
 
 详细设计文档见 [design.md](design.md)；实现报告见 [implementation.md](implementation.md)。

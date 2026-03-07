@@ -12,7 +12,7 @@
 
 ## Current Status
 
-**v0.9.13**
+**v0.9.14**
 
 - 阶段一：框架搭建 + 静态文件浏览 ✓
 - 阶段二：过滤链 + 搜索 + 实时监控 ✓
@@ -32,8 +32,10 @@
 - v0.9.11：Ctrl+C SIGINT 修复（MSYS2/mintty）、补全弹窗边框对齐、Del 键支持、补全弹窗渲染测试 ✓
 - v0.9.12：Ctrl+C 根本修复（禁用 ENABLE_PROCESSED_INPUT）、全面渲染层测试补充（+40 tests）✓
 - v0.9.13：控制字符渲染修复（\r/\x01/\x7F→'.'）、Ctrl+C 复盘文档、控制字符渲染层测试（+8 tests）✓
+- post-v0.9.13：渲染层测试覆盖补全（overlay/viewport/drag/highlight 各+1，共+4 tests）✓
+- v0.9.14：Ctrl+C 复制修复（mintty/PTY 双路径：ctrlHandler→PostEvent）、debug log 清理、CatchEvent 路径渲染测试（+1 test）✓
 
-当前测试：452 个，全部通过。
+当前测试：457 个，全部通过。
 
 ---
 

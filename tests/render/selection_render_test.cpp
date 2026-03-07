@@ -196,3 +196,38 @@ TEST_F(SelectionRenderTest, DragPastRightEdgeScrollsHorizontally) {
     EXPECT_GT(ctrl_.getViewData(8, 6).rawHScroll, 0u)
         << "Dragging past the right edge (x=85 > termW=80) should increase rawHScroll";
 }
+
+// ── Ctrl+C via CatchEvent preserves selection ─────────────────────────────────
+// Verifies that Event::CtrlC routed through the full component stack (CatchEvent
+// in render.cpp) copies to clipboard without clearing the selection or changing
+// the input mode.  This exercises the path taken in production — unlike the
+// e2e test in misc_keys_test.cpp which calls handleKey() directly and bypasses
+// CatchEvent entirely.
+
+TEST_F(SelectionRenderTest, CtrlCViaCatchEventPreservesSelection) {
+    auto comp = CreateMainComponent(ctrl_, screen_);
+    ctrl_.onTerminalResize(80, 20);
+
+    // Render once to establish layout.
+    {
+        auto scr = ftxui::Screen::Create(ftxui::Dimension::Fixed(80),
+                                          ftxui::Dimension::Fixed(20));
+        ftxui::Render(scr, comp->Render());
+    }
+
+    // Establish an active selection (bytes 0-4 of line 0 = "line1").
+    ctrl_.startSelection(FocusArea::Raw, 0, 0);
+    ctrl_.extendSelection(0, 4);
+    ctrl_.finalizeSelection();
+    ASSERT_TRUE(ctrl_.hasSelection());
+
+    // Send Event::CtrlC through the component — this goes through CatchEvent,
+    // not handleKey().  CatchEvent should copy to clipboard and return true
+    // (event consumed) without clearing selection or changing mode.
+    comp->OnEvent(ftxui::Event::CtrlC);
+
+    EXPECT_TRUE(ctrl_.hasSelection())
+        << "Selection should be preserved after Ctrl+C copy via CatchEvent";
+    EXPECT_FALSE(ctrl_.isInputActive())
+        << "Ctrl+C must not change input mode";
+}
