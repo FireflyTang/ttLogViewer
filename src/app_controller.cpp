@@ -405,10 +405,23 @@ bool AppController::handleKeyNone(const Event& event) {
     const int activePh = (focus_ == FocusArea::Raw)
                          ? lastRawPaneHeight_ : lastFilteredPaneHeight_;
 
-    return handleNavKeys(event, activePh)
+    if (handleNavKeys(event, activePh)
         || handleFilterKeys(event)
         || handleSearchKeys(event)
-        || handleModeKeys(event);
+        || handleModeKeys(event))
+        return true;
+
+    // Drag-and-drop: when a file is dragged onto the terminal, the path is
+    // inserted as keyboard characters.  Treat any unrecognised printable
+    // character as the start of an "open file" path.
+    if (event.is_character() && !event.input().empty()) {
+        const char c = event.input()[0];
+        if (c >= 0x20 && c != 0x7F) {
+            enterInputMode(InputMode::OpenFile, "Open: ", event.input());
+            return true;
+        }
+    }
+    return false;
 }
 
 // ── Filter input mode ─────────────────────────────────────────────────────────

@@ -12,7 +12,7 @@
 
 ## Current Status
 
-**v0.9.16**
+**v0.9.17**
 
 - 阶段一：框架搭建 + 静态文件浏览 ✓
 - 阶段二：过滤链 + 搜索 + 实时监控 ✓
@@ -36,8 +36,9 @@
 - v0.9.14：Ctrl+C 复制修复（mintty/PTY 双路径：ctrlHandler→PostEvent）、debug log 清理、CatchEvent 路径渲染测试（+1 test）✓
 - v0.9.15：文件编码自动识别（UTF-16LE/BE、UTF-8 BOM）、BOM 检测 + utf16ToUtf8 转换 + decoded_ 缓冲区、单元/渲染/E2E 测试（+16 tests）✓
 - v0.9.16：水平滚动裁剪修复（truncateToDisplayWidth，按显示列截断）、块字符/全角字符滚动不再错位（+9 tests）✓
+- v0.9.17：拖拽文件到终端自动打开（None 模式不认识的可打印字符自动进入 OpenFile 模式，+3 tests）✓
 
-当前测试：482 个，全部通过。
+当前测试：485 个，全部通过。
 
 ---
 

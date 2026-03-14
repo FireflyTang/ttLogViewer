@@ -54,6 +54,31 @@ TEST_F(MiscKeysTest, CtrlCWithSelectionDoesNotExit) {
     EXPECT_TRUE(ctrl_.hasSelection());  // selection preserved after copy
 }
 
+// ── Drag-and-drop: unrecognised printable char opens OpenFile mode ───────────
+
+TEST_F(MiscKeysTest, DragDropPrintableCharEntersOpenFileMode) {
+    // Simulates the first character of a dragged path (e.g. 'C' from C:\...).
+    key(ftxui::Event::Character("C"));
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::OpenFile);
+    EXPECT_EQ(d.inputBuffer, "C");
+}
+
+TEST_F(MiscKeysTest, DragDropPathCharsPopulateBuffer) {
+    // Simulate dragging "C:\log.txt" — characters arrive one by one.
+    for (char c : std::string("C:\\log.txt"))
+        key(ftxui::Event::Character(std::string(1, c)));
+    auto d = data();
+    EXPECT_EQ(d.inputMode, InputMode::OpenFile);
+    EXPECT_EQ(d.inputBuffer, "C:\\log.txt");
+}
+
+TEST_F(MiscKeysTest, DragDropControlCharDoesNotEnterOpenFileMode) {
+    // Control characters (< 0x20) must NOT trigger OpenFile mode.
+    key(ftxui::Event::Character("\x01"));  // Ctrl+A
+    EXPECT_EQ(data().inputMode, InputMode::None);
+}
+
 // ── #28: Search active still shows highlighted row ──────────────────────────
 
 TEST_F(MiscKeysTest, SearchActiveStillShowsHighlightedRow) {
