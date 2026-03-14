@@ -132,6 +132,21 @@ int byteOffsetToDisplayCol(std::string_view s, size_t startByte, size_t targetBy
     return col;
 }
 
+std::string_view truncateToDisplayWidth(std::string_view content, int maxCols) {
+    if (maxCols <= 0) return content.substr(0, 0);
+    size_t pos = 0;
+    int col = 0;
+    while (pos < content.size()) {
+        size_t prevPos = pos;
+        char32_t cp = decodeUtf8Codepoint(content, pos);
+        // Control chars render as '.' → 1 column; use max(1, width) for rendering
+        int w = (cp < 0x20 || cp == 0x7F) ? 1 : codepointDisplayWidth(cp);
+        if (col + w > maxCols) return content.substr(0, prevPos);
+        col += w;
+    }
+    return content;
+}
+
 // ── Line renderer ──────────────────────────────────────────────────────────────
 
 Element renderColoredLine(std::string_view content,
@@ -184,10 +199,8 @@ Element renderColoredLine(std::string_view content,
     std::vector<SelectionSpan> clippedSelSpans(selectionSpans);
 
     if (terminalWidth > 0) {
-        size_t avail = (folded && terminalWidth > 1)
-                       ? static_cast<size_t>(terminalWidth - 1)
-                       : static_cast<size_t>(terminalWidth);
-        content = truncateUtf8(content, avail);
+        int avail = (folded && terminalWidth > 1) ? terminalWidth - 1 : terminalWidth;
+        content = truncateToDisplayWidth(content, avail);
         // Drop spans that start at or beyond the new content size; clip span ends.
         const size_t sz = content.size();
         auto clipVec = [sz](auto& vec) {

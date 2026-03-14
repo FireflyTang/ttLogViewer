@@ -17,6 +17,12 @@ bool isUtf8Boundary(std::string_view s, size_t pos);
 // a valid UTF-8 codepoint boundary (backs up if necessary).
 std::string_view truncateUtf8(std::string_view content, size_t maxBytes);
 
+// Truncate `content` to fit within `maxCols` terminal display columns.
+// Respects UTF-8 codepoint boundaries and double-width characters (CJK, etc.).
+// Control characters (which render as '.') are counted as 1 column.
+// Returns a sub-view of `content`; never copies.
+std::string_view truncateToDisplayWidth(std::string_view content, int maxCols);
+
 // ── Color helper ───────────────────────────────────────────────────────────────
 
 // Parse "#RRGGBB" hex string into an ftxui Color, falling back to white on error.

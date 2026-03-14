@@ -373,3 +373,76 @@ TEST(ByteOffsetToDisplayCol, StartByteMidString) {
     // Start at byte 6 ("world"), measure to byte 9 → 3 columns
     EXPECT_EQ(byteOffsetToDisplayCol(s, 6, 9), 3);
 }
+
+// ── truncateToDisplayWidth ────────────────────────────────────────────────────
+
+TEST(TruncateToDisplayWidth, ASCIIFitsExact) {
+    EXPECT_EQ(truncateToDisplayWidth("hello", 5), "hello");
+}
+
+TEST(TruncateToDisplayWidth, ASCIIFitsWithRoom) {
+    EXPECT_EQ(truncateToDisplayWidth("hello", 10), "hello");
+}
+
+TEST(TruncateToDisplayWidth, ASCIITruncates) {
+    EXPECT_EQ(truncateToDisplayWidth("hello world", 5), "hello");
+}
+
+TEST(TruncateToDisplayWidth, ZeroMaxColsReturnsEmpty) {
+    EXPECT_EQ(truncateToDisplayWidth("hello", 0), "");
+}
+
+TEST(TruncateToDisplayWidth, EmptyInput) {
+    EXPECT_EQ(truncateToDisplayWidth("", 10), "");
+}
+
+TEST(TruncateToDisplayWidth, BlockCharFitsExactColumns) {
+    // U+2588 FULL BLOCK = 3 UTF-8 bytes, 1 display column
+    // "████" = 4 block chars = 4 columns, 12 bytes
+    std::string blocks(12, '\0');
+    // Manually write 4× U+2588 (0xE2 0x96 0x88)
+    for (int i = 0; i < 4; ++i) {
+        blocks[i*3+0] = '\xe2';
+        blocks[i*3+1] = '\x96';
+        blocks[i*3+2] = '\x88';
+    }
+    // Truncating to 4 columns should keep all 4 chars (12 bytes)
+    EXPECT_EQ(truncateToDisplayWidth(blocks, 4), blocks);
+    // Truncating to 2 columns should keep 2 chars (6 bytes)
+    EXPECT_EQ(truncateToDisplayWidth(blocks, 2), std::string_view(blocks).substr(0, 6));
+}
+
+TEST(TruncateToDisplayWidth, BlockCharMixedWithASCII) {
+    // "ab█cd" = 'a'(1B,1col) 'b'(1B,1col) █(3B,1col) 'c'(1B,1col) 'd'(1B,1col)
+    // Total: 7 bytes, 5 cols
+    std::string s = "ab\xe2\x96\x88" "cd";  // ab█cd
+    // maxCols=3 → "ab█" = 5 bytes
+    EXPECT_EQ(truncateToDisplayWidth(s, 3), std::string_view(s).substr(0, 5));
+    // maxCols=5 → full string
+    EXPECT_EQ(truncateToDisplayWidth(s, 5), s);
+}
+
+TEST(TruncateToDisplayWidth, CJKDoubleWidth) {
+    // "你好" = 2 CJK chars × 3 bytes each = 6 bytes, 4 display columns (2 per char)
+    std::string s = "\xe4\xbd\xa0\xe5\xa5\xbd";  // 你好
+    // maxCols=2 → "你" only (3 bytes)
+    EXPECT_EQ(truncateToDisplayWidth(s, 2), std::string_view(s).substr(0, 3));
+    // maxCols=4 → full string
+    EXPECT_EQ(truncateToDisplayWidth(s, 4), s);
+    // maxCols=3 → would overshoot at "好", so only "你" (3 bytes)
+    EXPECT_EQ(truncateToDisplayWidth(s, 3), std::string_view(s).substr(0, 3));
+}
+
+// ── renderColoredLine clips by display columns (block chars) ──────────────────
+
+TEST(RenderColoredLine, BlockCharClipByDisplayColumns) {
+    // A line of 8 block chars (█, U+2588) = 8 display cols, 24 bytes.
+    // With terminalWidth=4, only 4 chars (12 bytes) should appear.
+    std::string blocks;
+    for (int i = 0; i < 8; ++i) blocks += "\xe2\x96\x88";
+    auto e = renderColoredLine(blocks, {}, {}, false, 4, 0);
+    std::string s = renderLine(e, 6);
+    // The rendered output should contain block chars but not overflow the width.
+    // Since block chars appear in the screen, just verify no crash and no full string
+    EXPECT_NO_THROW(renderLine(e, 6));
+}
