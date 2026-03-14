@@ -96,3 +96,78 @@ TEST_F(FileOpenTest, OpenViaKeyOSwitchesFile) {
     openViaKeyAndWait(f2.path());
     EXPECT_EQ(data().totalLines, 1u);
 }
+
+// ── Encoding: E2E tests ────────────────────────────────────────────────────────
+// Verify that AppController + LogReader correctly expose decoded content from
+// UTF-16LE / UTF-16BE / UTF-8 BOM files through getViewData().
+
+// Build an ASCII string as UTF-16LE bytes (BOM included).
+static std::string makeUtf16LeE2E(const char* ascii) {
+    std::string out;
+    out.push_back('\xFF'); out.push_back('\xFE');
+    for (const char* p = ascii; *p; ++p) {
+        out.push_back(*p);
+        out.push_back('\x00');
+    }
+    return out;
+}
+
+// Build an ASCII string as UTF-16BE bytes (BOM included).
+static std::string makeUtf16BeE2E(const char* ascii) {
+    std::string out;
+    out.push_back('\xFE'); out.push_back('\xFF');
+    for (const char* p = ascii; *p; ++p) {
+        out.push_back('\x00');
+        out.push_back(*p);
+    }
+    return out;
+}
+
+TEST_F(FileOpenTest, Utf16LeFileLineCountAndContent) {
+    TempFile f(makeUtf16LeE2E("alpha\nbeta\ngamma\n"));
+    openAndWait(f.path());
+
+    EXPECT_EQ(data().totalLines, 3u);
+    EXPECT_EQ(reader_.getLine(1), "alpha");
+    EXPECT_EQ(reader_.getLine(2), "beta");
+    EXPECT_EQ(reader_.getLine(3), "gamma");
+}
+
+TEST_F(FileOpenTest, Utf16BeFileLineCountAndContent) {
+    TempFile f(makeUtf16BeE2E("x\ny\n"));
+    openAndWait(f.path());
+
+    EXPECT_EQ(data().totalLines, 2u);
+    EXPECT_EQ(reader_.getLine(1), "x");
+    EXPECT_EQ(reader_.getLine(2), "y");
+}
+
+TEST_F(FileOpenTest, Utf8BomFileContentWithoutBom) {
+    std::string content;
+    content.push_back('\xEF'); content.push_back('\xBB'); content.push_back('\xBF');
+    content += "first\nsecond\n";
+    TempFile f(content);
+    openAndWait(f.path());
+
+    EXPECT_EQ(data().totalLines, 2u);
+    // BOM must not appear in line 1.
+    EXPECT_EQ(reader_.getLine(1), "first");
+    EXPECT_EQ(reader_.getLine(2), "second");
+}
+
+TEST_F(FileOpenTest, Utf16LeNavigationWorks) {
+    // Verify that navigation keys work correctly on a UTF-16LE file
+    // (i.e. the cursor and scroll logic is not broken by the decoded buffer).
+    TempFile f(makeUtf16LeE2E("row1\nrow2\nrow3\nrow4\nrow5\n"));
+    openAndWait(f.path());
+
+    EXPECT_EQ(data().totalLines, 5u);
+    // Press ArrowDown to move cursor down: rawPane[1] (line 2) should be highlighted.
+    key(ftxui::Event::ArrowDown);
+    auto d = ctrl_.getViewData(5, 5);
+    ASSERT_GE(d.rawPane.size(), 2u);
+    EXPECT_FALSE(d.rawPane[0].highlighted)
+        << "First row should not be highlighted after pressing ArrowDown";
+    EXPECT_TRUE(d.rawPane[1].highlighted)
+        << "Second row should be highlighted after pressing ArrowDown";
+}

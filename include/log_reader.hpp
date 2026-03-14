@@ -10,6 +10,11 @@
 
 #include "i_log_reader.hpp"
 
+// Encoding detected from BOM at the start of the file.
+// UTF-8 without BOM is treated as Utf8 (the common case).
+// UTF-8 with BOM is also normalized to Utf8 (BOM stripped).
+enum class FileEncoding { Utf8, Utf16Le, Utf16Be };
+
 // Reads a log file via mmap and builds a line-offset index.
 // All public methods must be called from the UI thread,
 // EXCEPT getLine() / getLines() which are safe from any thread
@@ -22,6 +27,14 @@
 //
 // Invariant: lineOffsets_ is append-only and never reallocated after IndexThread starts.
 // IndexThread reserves capacity upfront (two-pass: count then fill).
+//
+// Encoding support:
+//   BOM is detected synchronously in open().  UTF-16LE/BE files are decoded to
+//   a UTF-8 string (decoded_) once; subsequent indexing and line reads operate
+//   on that buffer.  UTF-8 BOM files have the 3-byte BOM stripped into decoded_.
+//   Realtime mode for non-UTF-8 files: file growth triggers a full re-open
+//   (fileResetCb_) because decoded offsets can't be incrementally mapped to
+//   raw mmap offsets cheaply.
 class LogReader : public ILogReader {
 public:
     LogReader();
@@ -66,6 +79,9 @@ public:
     // Hold this to keep string_views from getLine() alive across threads.
     std::shared_ptr<void> mmapAnchor() const override;
 
+    // Returns the encoding detected from the file BOM.
+    FileEncoding detectedEncoding() const { return encoding_; }
+
 private:
     // Platform mmap wrapper – defined in log_reader.cpp only.
     struct MmapRegion;
@@ -73,6 +89,18 @@ private:
 
     std::string           path_;
     FileMode              mode_     = FileMode::Static;
+
+    // Encoding support.
+    // decoded_ is non-null for UTF-16LE/BE files and UTF-8 BOM files.
+    // It holds the normalized UTF-8 content; indexing and getLine() use it
+    // instead of mmap_ when set.
+    FileEncoding                 encoding_ = FileEncoding::Utf8;
+    std::shared_ptr<std::string> decoded_;
+
+    // Returns the base pointer and byte size of the content to index/read.
+    // If decoded_ is set, returns decoded_ data; otherwise mmap_ data.
+    const char* contentData() const;
+    size_t      contentSize() const;
 
     // lineOffsets_[i] = byte offset of line (i+1).
     // Append-only; capacity is reserved before IndexThread starts, so no

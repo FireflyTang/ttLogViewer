@@ -1,8 +1,8 @@
 # ttLogViewer 实现报告
 
-> 版本：v0.9.14
-> 测试：457 个，全部通过
-> 最后更新：2026-03-07
+> 版本：v0.9.15
+> 测试：473 个，全部通过
+> 最后更新：2026-03-14
 
 本文档是 ttLogViewer 的"开发记忆文档"，面向维护者和二次开发者，记录实际实现细节、架构决策依据、以及扩展指南。功能需求和接口设计见 [design.md](design.md)。
 
@@ -142,6 +142,24 @@ open(path)
 **mmap 平台差异**：
 - POSIX：`mmap()` / `munmap()`
 - Windows：`CreateFileMapping()` / `MapViewOfFile()` / `UnmapViewOfFile()`
+
+**编码支持（v0.9.15）**：
+
+`open()` 在启动 IndexThread 之前同步检测 BOM 并完成解码：
+
+```
+open(path)
+  └─ mmap 原始文件 → MmapRegion
+  └─ detectEncoding(mmap头) → FileEncoding::{Utf8, Utf16Le, Utf16Be}
+  └─ 若 Utf16Le/Utf16Be：utf16ToUtf8() → decoded_ (shared_ptr<string>)
+  └─ 若 UTF-8 BOM：复制去掉3字节BOM后的内容 → decoded_
+  └─ 若纯 UTF-8：decoded_ 为 null，直接用 mmap（零拷贝）
+  └─ IndexThread / getLine() 通过 contentData()/contentSize() 透明切换
+```
+
+- `mmapAnchor()` 在 decoded_ 非 null 时返回 decoded_，保证 string_view 不悬空
+- 实时模式 + 非 UTF-8：文件增长时触发 `fileResetCb_`（全量重开），因为 decoded 偏移不能增量对应 mmap 偏移
+- `FileEncoding` 枚举公开在 `log_reader.hpp`，测试可通过 `detectedEncoding()` 验证
 
 ### 3.3 FilterChain
 

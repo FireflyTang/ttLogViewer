@@ -12,7 +12,7 @@
 
 ## Current Status
 
-**v0.9.14**
+**v0.9.15**
 
 - 阶段一：框架搭建 + 静态文件浏览 ✓
 - 阶段二：过滤链 + 搜索 + 实时监控 ✓
@@ -34,8 +34,9 @@
 - v0.9.13：控制字符渲染修复（\r/\x01/\x7F→'.'）、Ctrl+C 复盘文档、控制字符渲染层测试（+8 tests）✓
 - post-v0.9.13：渲染层测试覆盖补全（overlay/viewport/drag/highlight 各+1，共+4 tests）✓
 - v0.9.14：Ctrl+C 复制修复（mintty/PTY 双路径：ctrlHandler→PostEvent）、debug log 清理、CatchEvent 路径渲染测试（+1 test）✓
+- v0.9.15：文件编码自动识别（UTF-16LE/BE、UTF-8 BOM）、BOM 检测 + utf16ToUtf8 转换 + decoded_ 缓冲区、单元/渲染/E2E 测试（+16 tests）✓
 
-当前测试：457 个，全部通过。
+当前测试：473 个，全部通过。
 
 ---
 

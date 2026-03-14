@@ -48,6 +48,9 @@ add_executable(ttLogViewer_tests
     # Post-v0.9.9 bug fixes (#24-#32)
     e2e/misc_keys_test.cpp
     e2e/input_cursor_test.cpp
+
+    # Encoding support (UTF-16LE/BE, UTF-8 BOM)
+    render/encoding_render_test.cpp
 )
 
 target_include_directories(ttLogViewer_tests PRIVATE
